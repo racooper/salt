@@ -1,10 +1,25 @@
 # -*- coding: utf-8 -*-
-from __future__ import absolute_import
-from __future__ import print_function
+from __future__ import absolute_import, print_function, unicode_literals
 
 import sys
 
 import salt.payload
+
+
+def _trim_dict_in_dict(data, max_val_size, replace_with):
+    '''
+    Takes a dictionary, max_val_size and replace_with
+    and recursively loops through and replaces any values
+    that are greater than max_val_size.
+    '''
+    for key in data:
+        if isinstance(data[key], dict):
+            _trim_dict_in_dict(data[key],
+                               max_val_size,
+                               replace_with)
+        else:
+            if sys.getsizeof(data[key]) > max_val_size:
+                data[key] = replace_with
 
 
 def trim_dict(
@@ -13,7 +28,8 @@ def trim_dict(
         percent=50.0,
         stepper_size=10,
         replace_with='VALUE_TRIMMED',
-        is_msgpacked=False):
+        is_msgpacked=False,
+        use_bin_type=False):
     '''
     Takes a dictionary and iterates over its keys, looking for
     large values and replacing them with a trimmed string.
@@ -40,6 +56,12 @@ def trim_dict(
 
     If a msgpack is passed in, it will be repacked if necessary
     before being returned.
+
+    :param use_bin_type: Set this to true if "is_msgpacked=True"
+                         and the msgpack data has been encoded
+                         with "use_bin_type=True". This also means
+                         that the msgpack data should be decoded with
+                         "encoding='utf-8'".
     '''
     serializer = salt.payload.Serial({'serial': 'msgpack'})
     if is_msgpacked:
@@ -48,31 +70,46 @@ def trim_dict(
         dict_size = sys.getsizeof(serializer.dumps(data))
     if dict_size > max_dict_bytes:
         if is_msgpacked:
-            data = serializer.loads(data)
+            if use_bin_type:
+                data = serializer.loads(data, encoding='utf-8')
+            else:
+                data = serializer.loads(data)
         while True:
             percent = float(percent)
             max_val_size = float(max_dict_bytes * (percent / 100))
             try:
                 for key in data:
-                    if sys.getsizeof(data[key]) > max_val_size:
-                        data[key] = replace_with
+                    if isinstance(data[key], dict):
+                        _trim_dict_in_dict(data[key],
+                                           max_val_size,
+                                           replace_with)
+                    else:
+                        if sys.getsizeof(data[key]) > max_val_size:
+                            data[key] = replace_with
                 percent = percent - stepper_size
                 max_val_size = float(max_dict_bytes * (percent / 100))
-                cur_dict_size = sys.getsizeof(serializer.dumps(data))
+                if use_bin_type:
+                    dump_data = serializer.dumps(data, use_bin_type=True)
+                else:
+                    dump_data = serializer.dumps(data)
+                cur_dict_size = sys.getsizeof(dump_data)
                 if cur_dict_size < max_dict_bytes:
                     if is_msgpacked:  # Repack it
-                        return serializer.dumps(data)
+                        return dump_data
                     else:
                         return data
                 elif max_val_size == 0:
                     if is_msgpacked:
-                        return serializer.dumps(data)
+                        return dump_data
                     else:
                         return data
             except ValueError:
                 pass
         if is_msgpacked:
-            return serializer.dumps(data)
+            if use_bin_type:
+                return serializer.dumps(data, use_bin_type=True)
+            else:
+                return serializer.dumps(data)
         else:
             return data
     else:

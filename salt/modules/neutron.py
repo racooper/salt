@@ -39,10 +39,34 @@ Module for handling OpenStack Neutron calls
     For example::
 
         salt '*' neutron.network_list profile=openstack1
+
+    To use keystoneauth1 instead of keystoneclient, include the `use_keystoneauth`
+    option in the pillar or minion config.
+
+    .. note:: this is required to use keystone v3 as for authentication.
+
+    .. code-block:: yaml
+
+        keystone.user: admin
+        keystone.password: verybadpass
+        keystone.tenant: admin
+        keystone.auth_url: 'http://127.0.0.1:5000/v3/'
+        keystone.region_name: 'RegionOne'
+        keystone.service_type: 'network'
+        keystone.use_keystoneauth: true
+        keystone.verify: '/path/to/custom/certs/ca-bundle.crt'
+
+
+    Note: by default the neutron module will attempt to verify its connection
+    utilizing the system certificates. If you need to verify against another bundle
+    of CA certificates or want to skip verification altogether you will need to
+    specify the `verify` option. You can specify True or False to verify (or not)
+    against system certificates, a path to a bundle or CA certs to check against, or
+    None to allow keystoneauth to search for the certificates on its own.(defaults to True)
 '''
 
 # Import python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 import logging
 
 # Import salt libs
@@ -83,7 +107,10 @@ def _auth(profile=None):
         tenant = credentials['keystone.tenant']
         auth_url = credentials['keystone.auth_url']
         region_name = credentials.get('keystone.region_name', None)
-        service_type = credentials['keystone.service_type']
+        service_type = credentials.get('keystone.service_type', 'network')
+        os_auth_system = credentials.get('keystone.os_auth_system', None)
+        use_keystoneauth = credentials.get('keystone.use_keystoneauth', False)
+        verify = credentials.get('keystone.verify', True)
     else:
         user = __salt__['config.option']('keystone.user')
         password = __salt__['config.option']('keystone.password')
@@ -91,15 +118,37 @@ def _auth(profile=None):
         auth_url = __salt__['config.option']('keystone.auth_url')
         region_name = __salt__['config.option']('keystone.region_name')
         service_type = __salt__['config.option']('keystone.service_type')
+        os_auth_system = __salt__['config.option']('keystone.os_auth_system')
+        use_keystoneauth = __salt__['config.option']('keystone.use_keystoneauth')
+        verify = __salt__['config.option']('keystone.verify')
 
-    kwargs = {
-        'username': user,
-        'password': password,
-        'tenant_name': tenant,
-        'auth_url': auth_url,
-        'region_name': region_name,
-        'service_type': service_type
-    }
+    if use_keystoneauth is True:
+        project_domain_name = credentials['keystone.project_domain_name']
+        user_domain_name = credentials['keystone.user_domain_name']
+
+        kwargs = {
+            'username': user,
+            'password': password,
+            'tenant_name': tenant,
+            'auth_url': auth_url,
+            'region_name': region_name,
+            'service_type': service_type,
+            'os_auth_plugin': os_auth_system,
+            'use_keystoneauth': use_keystoneauth,
+            'verify': verify,
+            'project_domain_name': project_domain_name,
+            'user_domain_name': user_domain_name
+        }
+    else:
+        kwargs = {
+            'username': user,
+            'password': password,
+            'tenant_name': tenant,
+            'auth_url': auth_url,
+            'region_name': region_name,
+            'service_type': service_type,
+            'os_auth_plugin': os_auth_system
+        }
 
     return suoneu.SaltNeutron(**kwargs)
 
@@ -767,7 +816,7 @@ def create_floatingip(floating_network, port=None, profile=None):
     return conn.create_floatingip(floating_network, port)
 
 
-def update_floatingip(floatingip_id, port, profile=None):
+def update_floatingip(floatingip_id, port=None, profile=None):
     '''
     Updates a floatingIP
 
@@ -778,7 +827,8 @@ def update_floatingip(floatingip_id, port, profile=None):
         salt '*' neutron.update_floatingip network-name port-name
 
     :param floatingip_id: ID of floatingIP
-    :param port: ID or name of port
+    :param port: ID or name of port, to associate floatingip to `None` or do
+        not specify to disassociate the floatingip (Optional)
     :param profile: Profile to build on (Optional)
     :return: Value of updated floating IP information
     '''
@@ -994,7 +1044,7 @@ def delete_security_group_rule(security_group_rule_id, profile=None):
     return conn.delete_security_group_rule(security_group_rule_id)
 
 
-def list_vpnservices(retrive_all=True, profile=None, **kwargs):
+def list_vpnservices(retrieve_all=True, profile=None, **kwargs):
     '''
     Fetches a list of all configured VPN services for a tenant
 
@@ -1004,12 +1054,12 @@ def list_vpnservices(retrive_all=True, profile=None, **kwargs):
 
         salt '*' neutron.list_vpnservices
 
-    :param retrive_all: True or False, default: True (Optional)
+    :param retrieve_all: True or False, default: True (Optional)
     :param profile: Profile to build on (Optional)
     :return: List of VPN service
     '''
     conn = _auth(profile)
-    return conn.list_vpnservices(retrive_all, **kwargs)
+    return conn.list_vpnservices(retrieve_all, **kwargs)
 
 
 def show_vpnservice(vpnservice, profile=None, **kwargs):
@@ -1372,165 +1422,200 @@ def delete_ipsecpolicy(ipsecpolicy, profile=None):
     return conn.delete_ipsecpolicy(ipsecpolicy)
 
 
-# The following is a list of functions that need to be incorporated in the
-# neutron module. This list should be updated as functions are added.
-#
-# update_ipsec_site_connection
-#                       Updates an IPsecSiteConnection.
-# update_ikepolicy      Updates an IKEPolicy
-# update_ipsecpolicy    Updates an IPsecPolicy
-# list_vips             Fetches a list of all load balancer vips for a tenant.
-# show_vip              Fetches information of a certain load balancer vip.
-# create_vip            Creates a new load balancer vip.
-# update_vip            Updates a load balancer vip.
-# delete_vip            Deletes the specified load balancer vip.
-# list_pools            Fetches a list of all load balancer pools for a tenant.
-# show_pool             Fetches information of a certain load balancer pool.
-# create_pool           Creates a new load balancer pool.
-# update_pool           Updates a load balancer pool.
-# delete_pool           Deletes the specified load balancer pool.
-# retrieve_pool_stats   Retrieves stats for a certain load balancer pool.
-# list_members          Fetches a list of all load balancer members for
-#                       a tenant.
-# show_member           Fetches information of a certain load balancer member.
-# create_member         Creates a new load balancer member.
-# update_member         Updates a load balancer member.
-# delete_member         Deletes the specified load balancer member.
-# list_health_monitors  Fetches a list of all load balancer health monitors for
-#                       a tenant.
-# show_health_monitor   Fetches information of a certain load balancer
-#                       health monitor.
-# create_health_monitor
-#                       Creates a new load balancer health monitor.
-# update_health_monitor
-#                       Updates a load balancer health monitor.
-# delete_health_monitor
-#                       Deletes the specified load balancer health monitor.
-# associate_health_monitor
-#                       Associate  specified load balancer health monitor
-#                       and pool.
-# disassociate_health_monitor
-#                       Disassociate specified load balancer health monitor
-#                       and pool.
-# create_qos_queue      Creates a new queue.
-# list_qos_queues       Fetches a list of all queues for a tenant.
-# show_qos_queue        Fetches information of a certain queue.
-# delete_qos_queue      Deletes the specified queue.
-# list_agents           Fetches agents.
-# show_agent            Fetches information of a certain agent.
-# update_agent          Updates an agent.
-# delete_agent          Deletes the specified agent.
-# list_network_gateways
-#                       Retrieve network gateways.
-# show_network_gateway  Fetch a network gateway.
-# create_network_gateway
-#                       Create a new network gateway.
-# update_network_gateway
-#                       Update a network gateway.
-# delete_network_gateway
-#                       Delete the specified network gateway.
-# connect_network_gateway
-#                       Connect a network gateway to the specified network.
-# disconnect_network_gateway
-#                       Disconnect a network from the specified gateway.
-# list_gateway_devices  Retrieve gateway devices.
-# show_gateway_device   Fetch a gateway device.
-# create_gateway_device
-#                       Create a new gateway device.
-# update_gateway_device
-#                       Updates a new gateway device.
-# delete_gateway_device
-#                       Delete the specified gateway device.
-# list_dhcp_agent_hosting_networks
-#                       Fetches a list of dhcp agents hosting a network.
-# list_networks_on_dhcp_agent
-#                       Fetches a list of dhcp agents hosting a network.
-# add_network_to_dhcp_agent
-#                       Adds a network to dhcp agent.
-# remove_network_from_dhcp_agent
-#                       Remove a network from dhcp agent.
-# list_l3_agent_hosting_routers
-#                       Fetches a list of L3 agents hosting a router.
-# list_routers_on_l3_agent
-#                       Fetches a list of L3 agents hosting a router.
-# add_router_to_l3_agent
-#                       Adds a router to L3 agent.
-# list_firewall_rules   Fetches a list of all firewall rules for a tenant.
-# show_firewall_rule    Fetches information of a certain firewall rule.
-# create_firewall_rule  Creates a new firewall rule.
-# update_firewall_rule  Updates a firewall rule.
-# delete_firewall_rule  Deletes the specified firewall rule.
-# list_firewall_policies
-#                       Fetches a list of all firewall policies for a tenant.
-# show_firewall_policy  Fetches information of a certain firewall policy.
-# create_firewall_policy
-#                       Creates a new firewall policy.
-# update_firewall_policy
-#                       Updates a firewall policy.
-# delete_firewall_policy
-#                       Deletes the specified firewall policy.
-# firewall_policy_insert_rule
-#                       Inserts specified rule into firewall policy.
-# firewall_policy_remove_rule
-#                       Removes specified rule from firewall policy.
-# list_firewalls        Fetches a list of all firewals for a tenant.
-# show_firewall         Fetches information of a certain firewall.
-# create_firewall       Creates a new firewall.
-# update_firewall       Updates a firewall.
-# delete_firewall       Deletes the specified firewall.
-# remove_router_from_l3_agent
-#                       Remove a router from l3 agent.
-# get_lbaas_agent_hosting_pool
-#                       Fetches a loadbalancer agent hosting a pool.
-# list_pools_on_lbaas_agent
-#                       Fetches a list of pools hosted by
-#                       the loadbalancer agent.
-# list_service_providers
-#                       Fetches service providers.
-# list_credentials      Fetch a list of all credentials for a tenant.
-# show_credential       Fetch a credential.
-# create_credential     Create a new credential.
-# update_credential     Update a credential.
-# delete_credential     Delete the specified credential.
-# list_network_profile_bindings
-#                       Fetch a list of all tenants associated for
-#                       a network profile.
-# list_network_profiles
-#                       Fetch a list of all network profiles for a tenant.
-# show_network_profile  Fetch a network profile.
-# create_network_profile
-#                       Create a network profile.
-# update_network_profile
-#                       Update a network profile.
-# delete_network_profile
-#                       Delete the network profile.
-# list_policy_profile_bindings
-#                       Fetch a list of all tenants associated for
-#                       a policy profile.
-# list_policy_profiles  Fetch a list of all network profiles for a tenant.
-# show_policy_profile   Fetch a network profile.
-# update_policy_profile
-#                       Update a policy profile.
-# create_metering_label
-#                       Creates a metering label.
-# delete_metering_label
-#                       Deletes the specified metering label.
-# list_metering_labels  Fetches a list of all metering labels for a tenant.
-# show_metering_label   Fetches information of a certain metering label.
-# create_metering_label_rule
-#                       Creates a metering label rule.
-# delete_metering_label_rule
-#                       Deletes the specified metering label rule.
-# list_metering_label_rules
-#                       Fetches a list of all metering label rules for a label.
-# show_metering_label_rule
-#                       Fetches information of a certain metering label rule.
-# list_net_partitions   Fetch a list of all network partitions for a tenant.
-# show_net_partition    etch a network partition.
-# create_net_partition  Create a network partition.
-# delete_net_partition  Delete the network partition.
-# create_packet_filter  Create a new packet filter.
-# update_packet_filter  Update a packet filter.
-# list_packet_filters   Fetch a list of all packet filters for a tenant.
-# show_packet_filter    Fetch information of a certain packet filter.
-# delete_packet_filter  Delete the specified packet filter.
+def list_firewall_rules(profile=None):
+    '''
+    Fetches a list of all firewall rules for a tenant
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' neutron.list_firewall_rules
+
+    :param profile: Profile to build on (Optional)
+
+    :return: List of firewall rules
+    '''
+    conn = _auth(profile)
+    return conn.list_firewall_rules()
+
+
+def show_firewall_rule(firewall_rule, profile=None):
+    '''
+    Fetches information of a specific firewall rule
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' neutron.show_firewall_rule firewall-rule-name
+
+    :param ipsecpolicy: ID or name of firewall rule to look up
+
+    :param profile: Profile to build on (Optional)
+
+    :return: firewall rule information
+    '''
+    conn = _auth(profile)
+    return conn.show_firewall_rule(firewall_rule)
+
+
+def create_firewall_rule(protocol, action, profile=None, **kwargs):
+    '''
+    Creates a new firewall rule
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' neutron.create_firewall_rule protocol action
+                tenant_id=TENANT_ID name=NAME description=DESCRIPTION ip_version=IP_VERSION
+                source_ip_address=SOURCE_IP_ADDRESS destination_ip_address=DESTINATION_IP_ADDRESS source_port=SOURCE_PORT
+                destination_port=DESTINATION_PORT shared=SHARED enabled=ENABLED
+
+    :param protocol: Protocol for the firewall rule, choose "tcp","udp","icmp" or "None".
+    :param action: Action for the firewall rule, choose "allow" or "deny".
+    :param tenant_id: The owner tenant ID. (Optional)
+    :param name: Name for the firewall rule. (Optional)
+    :param description: Description for the firewall rule. (Optional)
+    :param ip_version: IP protocol version, default: 4. (Optional)
+    :param source_ip_address: Source IP address or subnet. (Optional)
+    :param destination_ip_address: Destination IP address or subnet. (Optional)
+    :param source_port: Source port (integer in [1, 65535] or range in a:b). (Optional)
+    :param destination_port: Destination port (integer in [1, 65535] or range in a:b). (Optional)
+    :param shared: Set shared to True, default: False. (Optional)
+    :param enabled: To enable this rule, default: True. (Optional)
+    '''
+    conn = _auth(profile)
+    return conn.create_firewall_rule(protocol, action, **kwargs)
+
+
+def delete_firewall_rule(firewall_rule, profile=None):
+    '''
+    Deletes the specified firewall_rule
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' neutron.delete_firewall_rule firewall-rule
+
+    :param firewall_rule: ID or name of firewall rule to delete
+    :param profile: Profile to build on (Optional)
+    :return: True(Succeed) or False
+    '''
+    conn = _auth(profile)
+    return conn.delete_firewall_rule(firewall_rule)
+
+
+def update_firewall_rule(firewall_rule,
+                         protocol=None,
+                         action=None,
+                         name=None,
+                         description=None,
+                         ip_version=None,
+                         source_ip_address=None,
+                         destination_ip_address=None,
+                         source_port=None,
+                         destination_port=None,
+                         shared=None,
+                         enabled=None,
+                         profile=None):
+    '''
+    Update a firewall rule
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' neutron.update_firewall_rule firewall_rule protocol=PROTOCOL action=ACTION
+                name=NAME description=DESCRIPTION ip_version=IP_VERSION
+                source_ip_address=SOURCE_IP_ADDRESS destination_ip_address=DESTINATION_IP_ADDRESS
+                source_port=SOURCE_PORT destination_port=DESTINATION_PORT shared=SHARED enabled=ENABLED
+
+    :param firewall_rule: ID or name of firewall rule to update.
+    :param protocol: Protocol for the firewall rule, choose "tcp","udp","icmp" or "None". (Optional)
+    :param action: Action for the firewall rule, choose "allow" or "deny". (Optional)
+    :param name: Name for the firewall rule. (Optional)
+    :param description: Description for the firewall rule. (Optional)
+    :param ip_version: IP protocol version, default: 4. (Optional)
+    :param source_ip_address: Source IP address or subnet. (Optional)
+    :param destination_ip_address: Destination IP address or subnet. (Optional)
+    :param source_port: Source port (integer in [1, 65535] or range in a:b). (Optional)
+    :param destination_port: Destination port (integer in [1, 65535] or range in a:b). (Optional)
+    :param shared: Set shared to True, default: False. (Optional)
+    :param enabled: To enable this rule, default: True. (Optional)
+    :param profile: Profile to build on (Optional)
+    '''
+    conn = _auth(profile)
+    return conn.update_firewall_rule(firewall_rule, protocol, action, name, description, ip_version,
+                                     source_ip_address, destination_ip_address, source_port, destination_port,
+                                     shared, enabled)
+
+
+def list_firewalls(profile=None):
+    '''
+    Fetches a list of all firewalls for a tenant
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' neutron.list_firewalls
+
+    :param profile: Profile to build on (Optional)
+    :return: List of firewalls
+    '''
+    conn = _auth(profile)
+    return conn.list_firewalls()
+
+
+def show_firewall(firewall, profile=None):
+    '''
+    Fetches information of a specific firewall rule
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' neutron.show_firewall firewall
+
+    :param firewall: ID or name of firewall to look up
+    :param profile: Profile to build on (Optional)
+    :return: firewall information
+    '''
+    conn = _auth(profile)
+    return conn.show_firewall(firewall)
+
+
+def list_l3_agent_hosting_routers(router, profile=None):
+    '''
+    List L3 agents hosting a router.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' neutron.list_l3_agent_hosting_routers router
+
+    :param router:router name or ID to query.
+    :param profile: Profile to build on (Optional)
+    :return: L3 agents message.
+    '''
+    conn = _auth(profile)
+    return conn.list_l3_agent_hosting_routers(router)
+
+
+def list_agents(profile=None):
+    '''
+    List agents.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' neutron.list_agents
+
+    :param profile: Profile to build on (Optional)
+    :return: agents message.
+    '''
+    conn = _auth(profile)
+    return conn.list_agents()

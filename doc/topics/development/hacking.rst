@@ -50,6 +50,12 @@ functionality
     again, although it does assume that the listed modules are all installed in the
     system PYTHONPATH at the time of virtualenv creation.
 
+.. note:: Python development package
+
+    Be sure to install python devel package in order to install required Python
+    modules. In Debian/Ubuntu run ``sudo apt-get install -y python-dev``. In RedHat
+    based system install ``python-devel``
+
 Activate the virtualenv:
 
 .. code-block:: bash
@@ -60,34 +66,8 @@ Install Salt (and dependencies) into the virtualenv:
 
 .. code-block:: bash
 
-    pip install M2Crypto    # Don't install on Debian/Ubuntu (see below)
-    pip install pyzmq PyYAML pycrypto msgpack-python jinja2 psutil
+    pip install pyzmq PyYAML pycrypto msgpack-python jinja2 psutil futures tornado
     pip install -e ./salt   # the path to the salt git clone from above
-
-.. note:: Installing M2Crypto
-
-    ``swig`` and ``libssl-dev`` are required to build M2Crypto. To fix
-    the error ``command 'swig' failed with exit status 1`` while installing M2Crypto,
-    try installing it with the following command:
-
-    .. code-block:: bash
-
-        env SWIG_FEATURES="-cpperraswarn -includeall -D__`uname -m`__ -I/usr/include/openssl" pip install M2Crypto
-
-    Debian and Ubuntu systems have modified openssl libraries and mandate that
-    a patched version of M2Crypto be installed. This means that M2Crypto
-    needs to be installed via apt:
-
-    .. code-block:: bash
-
-        apt-get install python-m2crypto
-
-    This also means that pulling in the M2Crypto installed using apt requires using
-    ``--system-site-packages`` when creating the virtualenv.
-
-    If you're using a platform other than Debian or Ubuntu, and you are
-    installing M2Crypto via pip instead of a system package, then you will also
-    need the ``gcc`` compiler.
 
 .. note:: Installing psutil
 
@@ -103,10 +83,10 @@ Install Salt (and dependencies) into the virtualenv:
 .. _`Fedora Linux`: http://fedoraproject.org/
 .. _`Amazon Linux`: https://aws.amazon.com/amazon-linux-ami/
 
-.. note:: Installing dependencies on OS X.
+.. note:: Installing dependencies on macOS.
 
-    You can install needed dependencies on OS X using homebrew or macports.
-    See :doc:`OS X Installation </topics/installation/osx>`
+    You can install needed dependencies on macOS using homebrew or macports.
+    See :ref:`macOS Installation <macos-installation>`
 
 .. warning:: Installing on RedHat-based Distros
 
@@ -121,11 +101,15 @@ During development it is easiest to be able to run the Salt master and minion
 that are installed in the virtualenv you created above, and also to have all
 the configuration, log, and cache files contained in the virtualenv as well.
 
+The ``/path/to/your/virtualenv`` referenced multiple times below is also
+available in the variable ``$VIRTUAL_ENV`` once the virtual environment is
+activated.
+
 Copy the master and minion config files into your virtualenv:
 
 .. code-block:: bash
 
-    mkdir -p /path/to/your/virtualenv/etc/salt
+    mkdir -p /path/to/your/virtualenv/etc/salt/pki/{master,minion}
     cp ./salt/conf/master ./salt/conf/minion /path/to/your/virtualenv/etc/salt/
 
 Edit the master config file:
@@ -133,28 +117,32 @@ Edit the master config file:
 1.  Uncomment and change the ``user: root`` value to your own user.
 2.  Uncomment and change the ``root_dir: /`` value to point to
     ``/path/to/your/virtualenv``.
-3.  If you are running version 0.11.1 or older, uncomment, and change the
+3.  Uncomment and change the ``pki_dir: /etc/salt/pki/master`` value to point to
+    ``/path/to/your/virtualenv/etc/salt/pki/master``
+4.  If you are running version 0.11.1 or older, uncomment, and change the
     ``pidfile: /var/run/salt-master.pid`` value to point to
     ``/path/to/your/virtualenv/salt-master.pid``.
-4.  If you are also running a non-development version of Salt you will have to
+5.  If you are also running a non-development version of Salt you will have to
     change the ``publish_port`` and ``ret_port`` values as well.
 
 Edit the minion config file:
 
 1.  Repeat the edits you made in the master config for the ``user`` and
     ``root_dir`` values as well as any port changes.
-2.  If you are running version 0.11.1 or older, uncomment, and change the
+2.  Uncomment and change the ``pki_dir: /etc/salt/pki/minion`` value to point to
+    ``/path/to/your/virtualenv/etc/salt/pki/minion``
+3.  If you are running version 0.11.1 or older, uncomment, and change the
     ``pidfile: /var/run/salt-minion.pid`` value to point to
     ``/path/to/your/virtualenv/salt-minion.pid``.
-3.  Uncomment and change the ``master: salt`` value to point at ``localhost``.
-4.  Uncomment and change the ``id:`` value to something descriptive like
+4.  Uncomment and change the ``master: salt`` value to point at ``localhost``.
+5.  Uncomment and change the ``id:`` value to something descriptive like
     "saltdev". This isn't strictly necessary but it will serve as a reminder of
     which Salt installation you are working with.
-5.  If you changed the ``ret_port`` value in the master config because you are
+6.  If you changed the ``ret_port`` value in the master config because you are
     also running a non-development version of Salt, then you will have to
     change the ``master_port`` value in the minion config to match.
 
-.. note:: Using `salt-call` with a :doc:`Standalone Minion </topics/tutorials/standalone_minion>`
+.. note:: Using `salt-call` with a :ref:`Standalone Minion <tutorial-standalone-minion>`
 
     If you plan to run `salt-call` with this self-contained development
     environment in a masterless setup, you should invoke `salt-call` with
@@ -172,7 +160,7 @@ installation is working:
     salt-minion -c ./etc/salt -d
     salt-key -c ./etc/salt -L
     salt-key -c ./etc/salt -A
-    salt -c ./etc/salt '*' test.ping
+    salt -c ./etc/salt '*' test.version
 
 Running the master and minion in debug mode can be helpful when developing. To
 do this, add ``-l debug`` to the calls to ``salt-master`` and ``salt-minion``.
@@ -183,22 +171,22 @@ If you would like to log to the console instead of to the log file, remove the
 .. note:: Too long socket path?
 
     Once the minion starts, you may see an error like the following:
-    
+
     .. code-block:: bash
-    
+
         zmq.core.error.ZMQError: ipc path "/path/to/your/virtualenv/
         var/run/salt/minion/minion_event_7824dcbcfd7a8f6755939af70b96249f_pub.ipc"
         is longer than 107 characters (sizeof(sockaddr_un.sun_path)).
-    
+
     This means that the path to the socket the minion is using is too long. This is
     a system limitation, so the only workaround is to reduce the length of this
     path. This can be done in a couple different ways:
-    
+
     1.  Create your virtualenv in a path that is short enough.
     2.  Edit the :conf_minion:`sock_dir` minion config variable and reduce its
         length. Remember that this path is relative to the value you set in
         :conf_minion:`root_dir`.
-    
+
     ``NOTE:`` The socket path is limited to 107 characters on Solaris and Linux,
     and 103 characters on BSD-based systems.
 
@@ -215,8 +203,8 @@ If you would like to log to the console instead of to the log file, remove the
         # use 'limit descriptors 2047' for c-shell
         ulimit -n 2047
 
-    To set file descriptors on OSX, refer to the :doc:`OS X Installation
-    </topics/installation/osx>` instructions.
+    To set file descriptors on macOS, refer to the :ref:`macOS Installation
+    <macos-installation>` instructions.
 
 
 Changing Default Paths
@@ -228,8 +216,8 @@ tools, you can explicitly tweak the default system paths that Salt expects:
 
 .. code-block:: bash
 
-    GENERATE_SALT_SYSPATHS=1 pip --global-option='--salt-root-dir=/path/to/your/virtualenv/' \
-        install -e ./salt   # the path to the salt git clone from above
+    GENERATE_SALT_SYSPATHS=1 pip install --global-option='--salt-root-dir=/path/to/your/virtualenv/' \
+        -e ./salt   # the path to the salt git clone from above
 
 
 You can now call all of Salt's CLI tools without explicitly passing the configuration directory.
@@ -237,15 +225,15 @@ You can now call all of Salt's CLI tools without explicitly passing the configur
 Additional Options
 ..................
 
-In case you want to distribute your virtualenv, you probably don't want to
-include Salt's clone ``.git/`` directory, and, without it, Salt won't report
-the accurate version. You can tell ``setup.py`` to generate the hardcoded
-version information which is distributable:
+If you want to distribute your virtualenv, you probably don't want to include
+Salt's clone ``.git/`` directory, and, without it, Salt won't report the
+accurate version. You can tell ``setup.py`` to generate the hardcoded version
+information which is distributable:
 
 .. code-block:: bash
 
-    GENERATE_SALT_SYSPATHS=1 WRITE_SALT_VERSION=1 pip --global-option='--salt-root-dir=/path/to/your/virtualenv/' \
-        install -e ./salt   # the path to the salt git clone from above
+    GENERATE_SALT_SYSPATHS=1 WRITE_SALT_VERSION=1 pip install --global-option='--salt-root-dir=/path/to/your/virtualenv/' \
+        -e ./salt   # the path to the salt git clone from above
 
 
 Instead of passing those two environmental variables, you can just pass a
@@ -253,11 +241,11 @@ single one which will trigger the other two:
 
 .. code-block:: bash
 
-    MIMIC_SALT_INSTALL=1 pip --global-option='--salt-root-dir=/path/to/your/virtualenv/' \
-        install -e ./salt   # the path to the salt git clone from above
+    MIMIC_SALT_INSTALL=1 pip install --global-option='--salt-root-dir=/path/to/your/virtualenv/' \
+        -e ./salt   # the path to the salt git clone from above
 
 
-This last one will grant you an edditable salt installation with hardcoded
+This last one will grant you an editable salt installation with hardcoded
 system paths and version information.
 
 
@@ -282,7 +270,7 @@ to a virtualenv using pip:
 
 .. code-block:: bash
 
-    pip install Sphinx==1.3b2
+    pip install Sphinx==1.3.1
 
 Change to salt documentation directory, then:
 
@@ -295,7 +283,9 @@ Change to salt documentation directory, then:
   :strong:`text`.
 - The docs then are built within the :strong:`docs/_build/` folder. To update
   the docs after making changes, run ``make`` again.
-- The docs use `reStructuredText <http://sphinx-doc.org/rest.html>`_ for markup.
+- The docs use `reStructuredText
+  <https://www.sphinx-doc.org/en/master/usage/restructuredtext/basics.html>`_
+  for markup.
   See a live demo at http://rst.ninjs.org/.
 - The help information on each module or state is culled from the python code
   that runs for that piece. Find them in ``salt/modules/`` or ``salt/states/``.
@@ -331,7 +321,7 @@ Run the test suite with following command:
 
     ./setup.py test
 
-See :doc:`here <tests/index>` for more information regarding the test suite.
+See :ref:`here <salt-test-suite>` for more information regarding the test suite.
 
 Issue and Pull Request Labeling System
 --------------------------------------

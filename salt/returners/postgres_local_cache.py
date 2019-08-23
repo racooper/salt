@@ -3,8 +3,19 @@
 Use a postgresql server for the master job cache. This helps the job cache to
 cope with scale.
 
+.. note::
+    There are three PostgreSQL returners.  Any can function as an external
+    :ref:`master job cache <external-job-cache>`. but each has different
+    features.  SaltStack recommends
+    :mod:`returners.pgjsonb <salt.returners.pgjsonb>` if you are working with
+    a version of PostgreSQL that has the appropriate native binary JSON types.
+    Otherwise, review
+    :mod:`returners.postgres <salt.returners.postgres>` and
+    :mod:`returners.postgres_local_cache <salt.returners.postgres_local_cache>`
+    to see which module best suits your particular needs.
+
 :maintainer:    gjredelinghuys@gmail.com
-:maturity:      New
+:maturity:      Stable
 :depends:       psycopg2
 :platform:      all
 
@@ -29,6 +40,12 @@ correctly:
     CREATE ROLE salt WITH PASSWORD 'salt';
     CREATE DATABASE salt WITH OWNER salt;
     EOF
+
+In case the postgres database is a remote host, you'll need this command also:
+
+.. code-block:: sql
+
+   ALTER ROLE salt WITH LOGIN;
 
 and then:
 
@@ -56,6 +73,8 @@ and then:
     --
     -- Table structure for table 'salt_returns'
     --
+    -- note that 'success' must not have NOT NULL constraint, since
+    -- some functions don't provide it.
 
     DROP TABLE IF EXISTS salt_returns;
     CREATE TABLE salt_returns (
@@ -70,22 +89,34 @@ and then:
     CREATE INDEX ON salt_returns (id);
     CREATE INDEX ON salt_returns (jid);
     CREATE INDEX ON salt_returns (fun);
+
+    DROP TABLE IF EXISTS salt_events;
+    CREATE TABLE salt_events (
+      id SERIAL,
+      tag text NOT NULL,
+      data text NOT NULL,
+      alter_time TIMESTAMP WITH TIME ZONE DEFAULT now(),
+      master_id text NOT NULL
+    );
+    CREATE INDEX ON salt_events (tag);
+    CREATE INDEX ON salt_events (data);
+    CREATE INDEX ON salt_events (id);
+    CREATE INDEX ON salt_events (master_id);
     EOF
 
 Required python modules: psycopg2
 '''
 
 # Import python libs
-from __future__ import absolute_import
-import json
+from __future__ import absolute_import, print_function, unicode_literals
 import logging
 import re
 import sys
 
 # Import salt libs
-import salt.utils
 import salt.utils.jid
-import salt.ext.six as six
+import salt.utils.json
+from salt.ext import six
 
 # Import third party libs
 try:
@@ -96,22 +127,13 @@ except ImportError:
 
 log = logging.getLogger(__name__)
 
-# load is the published job
-LOAD_P = '.load.p'
-# the list of minions that the job is targeted to (best effort match on the
-# master side)
-MINIONS_P = '.minions.p'
-# return is the "return" from the minion data
-RETURN_P = 'return.p'
-# out is the "out" from the minion data
-OUT_P = 'out.p'
+__virtualname__ = 'postgres_local_cache'
 
 
 def __virtual__():
     if not HAS_POSTGRES:
-        log.info("Could not import psycopg2, postges_local_cache disabled.")
-        return False
-    return 'postgres_local_cache'
+        return (False, 'Could not import psycopg2; postges_local_cache disabled')
+    return __virtualname__
 
 
 def _get_conn():
@@ -126,7 +148,7 @@ def _get_conn():
                database=__opts__['master_job_cache.postgres.db'],
                port=__opts__['master_job_cache.postgres.port'])
     except psycopg2.OperationalError:
-        log.error("Could not connect to SQL server: " + str(sys.exc_info()[0]))
+        log.error('Could not connect to SQL server: %s', sys.exc_info()[0])
         return None
     return conn
 
@@ -144,10 +166,10 @@ def _format_job_instance(job):
     Format the job instance correctly
     '''
     ret = {'Function': job.get('fun', 'unknown-function'),
-           'Arguments': json.loads(job.get('arg', '[]')),
+           'Arguments': salt.utils.json.loads(job.get('arg', '[]')),
            # unlikely but safeguard from invalid returns
            'Target': job.get('tgt', 'unknown-target'),
-           'Target-type': job.get('tgt_type', []),
+           'Target-type': job.get('tgt_type', 'list'),
            'User': job.get('user', 'root')}
     # TODO: Add Metadata support when it is merged from develop
     return ret
@@ -166,7 +188,7 @@ def _gen_jid(cur):
     '''
     Generate an unique job id
     '''
-    jid = salt.utils.jid.gen_jid()
+    jid = salt.utils.jid.gen_jid(__opts__)
     sql = '''SELECT jid FROM jids WHERE jid = %s'''
     cur.execute(sql, (jid,))
     data = cur.fetchall()
@@ -203,12 +225,6 @@ def returner(load):
     '''
     Return data to a postgres server
     '''
-    # salt guarantees that there will be 'fun', 'jid', 'return' and 'id' but not
-    # 'success'
-    success = 'Unknown'
-    if 'success' in load:
-        success = load['success']
-
     conn = _get_conn()
     if conn is None:
         return None
@@ -216,19 +232,49 @@ def returner(load):
     sql = '''INSERT INTO salt_returns
             (fun, jid, return, id, success)
             VALUES (%s, %s, %s, %s, %s)'''
+    try:
+        ret = six.text_type(load['return'])
+    except UnicodeDecodeError:
+        ret = str(load['return'])
+    job_ret = {'return': ret}
+    if 'retcode' in load:
+        job_ret['retcode'] = load['retcode']
+    if 'success' in load:
+        job_ret['success'] = load['success']
     cur.execute(
         sql, (
             load['fun'],
             load['jid'],
-            json.dumps(six.text_type(str(load['return']), 'utf-8', 'replace')),
+            salt.utils.json.dumps(job_ret),
             load['id'],
-            success
+            load.get('success'),
         )
     )
     _close_conn(conn)
 
 
-def save_load(jid, clear_load):
+def event_return(events):
+    '''
+    Return event to a postgres server
+
+    Require that configuration be enabled via 'event_return'
+    option in master config.
+    '''
+    conn = _get_conn()
+    if conn is None:
+        return None
+    cur = conn.cursor()
+    for event in events:
+        tag = event.get('tag', '')
+        data = event.get('data', '')
+        sql = '''INSERT INTO salt_events
+                (tag, data, master_id)
+                VALUES (%s, %s, %s)'''
+        cur.execute(sql, (tag, salt.utils.json.dumps(data), __opts__['id']))
+    _close_conn(conn)
+
+
+def save_load(jid, clear_load, minions=None):
     '''
     Save the load to the specified jid id
     '''
@@ -246,25 +292,32 @@ def save_load(jid, clear_load):
         sql, (
             jid,
             salt.utils.jid.jid_to_time(jid),
-            str(clear_load.get("tgt_type")),
-            str(clear_load.get("cmd")),
-            str(clear_load.get("tgt")),
-            str(clear_load.get("kwargs")),
-            str(clear_load.get("ret")),
-            str(clear_load.get("user")),
-            str(json.dumps(clear_load.get("arg"))),
-            str(clear_load.get("fun")),
+            six.text_type(clear_load.get("tgt_type")),
+            six.text_type(clear_load.get("cmd")),
+            six.text_type(clear_load.get("tgt")),
+            six.text_type(clear_load.get("kwargs")),
+            six.text_type(clear_load.get("ret")),
+            six.text_type(clear_load.get("user")),
+            six.text_type(salt.utils.json.dumps(clear_load.get("arg"))),
+            six.text_type(clear_load.get("fun")),
         )
     )
     # TODO: Add Metadata support when it is merged from develop
     _close_conn(conn)
 
 
+def save_minions(jid, minions, syndic_id=None):  # pylint: disable=unused-argument
+    '''
+    Included for API consistency
+    '''
+    pass
+
+
 def _escape_jid(jid):
     '''
-    Do proper formating of the jid
+    Do proper formatting of the jid
     '''
-    jid = str(jid)
+    jid = six.text_type(jid)
     jid = re.sub(r"'*", "", jid)
     return jid
 
@@ -322,8 +375,12 @@ def get_jid(jid):
     ret = {}
     if data:
         for minion, full_ret in data:
-            ret[minion] = {}
-            ret[minion]['return'] = json.loads(full_ret)
+            ret_data = salt.utils.json.loads(full_ret)
+            if not isinstance(ret_data, dict) or 'return' not in ret_data:
+                # Convert the old format in which the return contains the only return data to the
+                # new that is dict containing 'return' and optionally 'retcode' and 'success'.
+                ret_data = {'return': ret_data}
+            ret[minion] = ret_data
     _close_conn(conn)
     return ret
 
@@ -340,7 +397,7 @@ def get_jids():
           '''FROM jids'''
     if __opts__['keep_jobs'] != 0:
         sql = sql + " WHERE started > NOW() - INTERVAL '" \
-                + str(__opts__['keep_jobs']) + "' HOUR"
+                + six.text_type(__opts__['keep_jobs']) + "' HOUR"
 
     cur.execute(sql)
     ret = {}

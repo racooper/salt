@@ -2,19 +2,19 @@
 '''
 Riak Salt Module
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals, print_function
 
 # Import salt libs
-import salt.utils
+import salt.utils.path
 
 
 def __virtual__():
     '''
     Only available on systems with Riak installed.
     '''
-    if salt.utils.which('riak'):
+    if salt.utils.path.which('riak'):
         return True
-    return False
+    return (False, 'The riak execution module failed to load: the riak binary is not in the path.')
 
 
 def __execute_cmd(name, cmd):
@@ -22,7 +22,7 @@ def __execute_cmd(name, cmd):
     Execute Riak commands
     '''
     return __salt__['cmd.run_all'](
-        '{0} {1}'.format(salt.utils.which(name), cmd)
+        '{0} {1}'.format(salt.utils.path.which(name), cmd)
     )
 
 

@@ -4,10 +4,11 @@ Make me some salt!
 '''
 
 # Import python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 import os
 import warnings
 from salt.utils.verify import verify_log
+
 
 # All salt related deprecation warnings should be shown once each!
 warnings.filterwarnings(
@@ -40,27 +41,92 @@ import salt.log.setup
 # the try block below bypasses an issue at build time so that modules don't
 # cause the build to fail
 from salt.utils import migrations
-from salt.utils import kinds
+import salt.utils.kinds as kinds
 
 try:
-    from salt.utils import parsers, ip_bracket
+    from salt.utils.zeromq import ip_bracket
+    import salt.utils.parsers
     from salt.utils.verify import check_user, verify_env, verify_socket
-    from salt.utils.verify import verify_files
 except ImportError as exc:
     if exc.args[0] != 'No module named _msgpack':
         raise
-from salt.exceptions import SaltSystemExit
+from salt.exceptions import SaltSystemExit, SaltClientError, get_error_message
 
 
-# Let's instantiate logger using salt.log.setup.logging.getLogger() so pylint
+# Let's instantiate log using salt.log.setup.logging.getLogger() so pylint
 # leaves us alone and stops complaining about an un-used import
-logger = salt.log.setup.logging.getLogger(__name__)
+log = salt.log.setup.logging.getLogger(__name__)
 
 
-class Master(parsers.MasterOptionParser):
+class DaemonsMixin(object):  # pylint: disable=no-init
+    '''
+    Uses the same functions for all daemons
+    '''
+    def verify_hash_type(self):
+        '''
+        Verify and display a nag-messsage to the log if vulnerable hash-type is used.
+
+        :return:
+        '''
+        if self.config['hash_type'].lower() in ['md5', 'sha1']:
+            log.warning(
+                'IMPORTANT: Do not use %s hashing algorithm! Please set '
+                '"hash_type" to sha256 in Salt %s config!',
+                self.config['hash_type'], self.__class__.__name__
+            )
+
+    def action_log_info(self, action):
+        '''
+        Say daemon starting.
+
+        :param action
+        :return:
+        '''
+        log.info('%s the Salt %s', action, self.__class__.__name__)
+
+    def start_log_info(self):
+        '''
+        Say daemon starting.
+
+        :return:
+        '''
+        log.info('The Salt %s is starting up', self.__class__.__name__)
+
+    def shutdown_log_info(self):
+        '''
+        Say daemon shutting down.
+
+        :return:
+        '''
+        log.info('The Salt %s is shut down', self.__class__.__name__)
+
+    def environment_failure(self, error):
+        '''
+        Log environment failure for the daemon and exit with the error code.
+
+        :param error:
+        :return:
+        '''
+        log.exception(
+            'Failed to create environment for %s: %s',
+            self.__class__.__name__, get_error_message(error)
+        )
+        self.shutdown(error)
+
+
+class Master(salt.utils.parsers.MasterOptionParser, DaemonsMixin):  # pylint: disable=no-init
     '''
     Creates a master server
     '''
+    def _handle_signals(self, signum, sigframe):  # pylint: disable=unused-argument
+        if hasattr(self.master, 'process_manager'):
+            # escalate signal to the process manager processes
+            self.master.process_manager.stop_restarting()
+            self.master.process_manager.send_signal_to_processes(signum)
+            # kill any remaining processes
+            self.master.process_manager.kill_children()
+        super(Master, self)._handle_signals(signum, sigframe)
+
     def prepare(self):
         '''
         Run the preparation sequence required to start a salt master server.
@@ -69,7 +135,7 @@ class Master(parsers.MasterOptionParser):
 
             super(YourSubClass, self).prepare()
         '''
-        self.parse_args()
+        super(Master, self).prepare()
 
         try:
             if self.config['verify_env']:
@@ -90,50 +156,35 @@ class Master(parsers.MasterOptionParser):
                         self.config['syndic_dir'],
                         self.config['sqlite_queue_dir'],
                     ]
-                if self.config.get('transport') == 'raet':
-                    v_dirs.append(os.path.join(self.config['pki_dir'], 'accepted'))
-                    v_dirs.append(os.path.join(self.config['pki_dir'], 'pending'))
-                    v_dirs.append(os.path.join(self.config['pki_dir'], 'rejected'))
-                    v_dirs.append(os.path.join(self.config['cachedir'], 'raet'))
                 verify_env(
                     v_dirs,
                     self.config['user'],
                     permissive=self.config['permissive_pki_access'],
+                    root_dir=self.config['root_dir'],
                     pki_dir=self.config['pki_dir'],
                 )
-                logfile = self.config['log_file']
-                if logfile is not None and not logfile.startswith(('tcp://',
-                                                                   'udp://',
-                                                                   'file://')):
-                    # Logfile is not using Syslog, verify
-                    verify_files([logfile], self.config['user'])
                 # Clear out syndics from cachedir
                 for syndic_file in os.listdir(self.config['syndic_dir']):
                     os.remove(os.path.join(self.config['syndic_dir'], syndic_file))
-        except OSError as err:
-            logger.exception('Failed to prepare salt environment')
-            self.shutdown(err.errno)
+        except OSError as error:
+            self.environment_failure(error)
 
         self.setup_logfile_logger()
         verify_log(self.config)
-        logger.info('Setting up the Salt Master')
+        self.action_log_info('Setting up')
 
         # TODO: AIO core is separate from transport
-        if self.config['transport'].lower() in ('zeromq', 'tcp'):
-            if not verify_socket(self.config['interface'],
-                                 self.config['publish_port'],
-                                 self.config['ret_port']):
-                self.shutdown(4, 'The ports are not available to bind')
-            self.config['interface'] = ip_bracket(self.config['interface'])
-            migrations.migrate_paths(self.config)
+        if not verify_socket(self.config['interface'],
+                             self.config['publish_port'],
+                             self.config['ret_port']):
+            self.shutdown(4, 'The ports are not available to bind')
+        self.config['interface'] = ip_bracket(self.config['interface'])
+        migrations.migrate_paths(self.config)
 
-            # Late import so logging works correctly
-            import salt.master
-            self.master = salt.master.Master(self.config)
-        else:
-            # Add a udp port check here
-            import salt.daemons.flo
-            self.master = salt.daemons.flo.IofloMaster(self.config)
+        # Late import so logging works correctly
+        import salt.master
+        self.master = salt.master.Master(self.config)
+
         self.daemonize_if_required()
         self.set_pidfile()
         salt.utils.process.notify_systemd()
@@ -148,28 +199,36 @@ class Master(parsers.MasterOptionParser):
 
         NOTE: Run any required code before calling `super()`.
         '''
-        self.prepare()
+        super(Master, self).start()
         if check_user(self.config['user']):
-            logger.info('The salt master is starting up')
-            try:
-                self.master.start()
-            except KeyboardInterrupt:
-                logger.warn('The salt master is shutting down')
-            finally:
-                self.shutdown()
+            self.action_log_info('Starting up')
+            self.verify_hash_type()
+            self.master.start()
 
     def shutdown(self, exitcode=0, exitmsg=None):
         '''
         If sub-classed, run any shutdown operations on this method.
         '''
-        logger.info('The salt master is shut down')
-        self.exit(exitcode, exitmsg)
+        self.shutdown_log_info()
+        msg = 'The salt master is shutdown. '
+        if exitmsg is not None:
+            exitmsg = msg + exitmsg
+        else:
+            exitmsg = msg.strip()
+        super(Master, self).shutdown(exitcode, exitmsg)
 
 
-class Minion(parsers.MinionOptionParser):  # pylint: disable=no-init
+class Minion(salt.utils.parsers.MinionOptionParser, DaemonsMixin):  # pylint: disable=no-init
     '''
     Create a minion server
     '''
+
+    def _handle_signals(self, signum, sigframe):  # pylint: disable=unused-argument
+        # escalate signal to the process manager processes
+        if hasattr(self.minion, 'stop'):
+            self.minion.stop(signum)
+        super(Minion, self)._handle_signals(signum, sigframe)
+
     # pylint: disable=no-member
     def prepare(self):
         '''
@@ -179,7 +238,7 @@ class Minion(parsers.MinionOptionParser):  # pylint: disable=no-init
 
             super(YourSubClass, self).prepare()
         '''
-        self.parse_args()
+        super(Minion, self).prepare()
 
         try:
             if self.config['verify_env']:
@@ -209,46 +268,30 @@ class Minion(parsers.MinionOptionParser):  # pylint: disable=no-init
                         confd,
                     ]
 
-                if self.config.get('transport') == 'raet':
-                    v_dirs.append(os.path.join(self.config['pki_dir'], 'accepted'))
-                    v_dirs.append(os.path.join(self.config['pki_dir'], 'pending'))
-                    v_dirs.append(os.path.join(self.config['pki_dir'], 'rejected'))
-                    v_dirs.append(os.path.join(self.config['cachedir'], 'raet'))
-
                 verify_env(
                     v_dirs,
                     self.config['user'],
                     permissive=self.config['permissive_pki_access'],
+                    root_dir=self.config['root_dir'],
                     pki_dir=self.config['pki_dir'],
                 )
-                logfile = self.config['log_file']
-                if logfile is not None and not logfile.startswith(('tcp://',
-                                                                'udp://',
-                                                                'file://')):
-                    # Logfile is not using Syslog, verify
-                    current_umask = os.umask(0o027)
-                    verify_files([logfile], self.config['user'])
-                    os.umask(current_umask)
-        except OSError as err:
-            logger.exception('Failed to prepare salt environment')
-            self.shutdown(err.errno)
+        except OSError as error:
+            self.environment_failure(error)
 
         self.setup_logfile_logger()
         verify_log(self.config)
-        logger.info(
-            'Setting up the Salt Minion "{0}"'.format(
-                self.config['id']
-            )
-        )
+        log.info('Setting up the Salt Minion "%s"', self.config['id'])
         migrations.migrate_paths(self.config)
 
         # Bail out if we find a process running and it matches out pidfile
         if self.check_running():
-            logger.exception('Salt minion is already running. Exiting.')
+            self.action_log_info('An instance is already running. Exiting')
             self.shutdown(1)
 
+        transport = self.config.get('transport').lower()
+
         # TODO: AIO core is separate from transport
-        if self.config['transport'].lower() in ('zeromq', 'tcp'):
+        if transport in ('zeromq', 'tcp', 'detect'):
             # Late import so logging works correctly
             import salt.minion
             # If the minion key has not been accepted, then Salt enters a loop
@@ -257,18 +300,15 @@ class Minion(parsers.MinionOptionParser):  # pylint: disable=no-init
             # This is the latest safe place to daemonize
             self.daemonize_if_required()
             self.set_pidfile()
-            if isinstance(self.config.get('master'), list):
-                if self.config.get('master_type') == 'failover':
-                    self.minion = salt.minion.Minion(self.config)
-                else:
-                    self.minion = salt.minion.MultiMinion(self.config)
-            else:
-                self.minion = salt.minion.Minion(self.config)
+            if self.config.get('master_type') == 'func':
+                salt.minion.eval_master_func(self.config)
+            self.minion = salt.minion.MinionManager(self.config)
         else:
-            import salt.daemons.flo
-            self.daemonize_if_required()
-            self.set_pidfile()
-            self.minion = salt.daemons.flo.IofloMinion(self.config)
+            log.error(
+                'The transport \'%s\' is not supported. Please use one of '
+                'the following: tcp, zeromq, or detect.', transport
+            )
+            self.shutdown(1)
 
     def start(self):
         '''
@@ -280,19 +320,32 @@ class Minion(parsers.MinionOptionParser):  # pylint: disable=no-init
 
         NOTE: Run any required code before calling `super()`.
         '''
+        super(Minion, self).start()
+        while True:
+            try:
+                self._real_start()
+            except SaltClientError as exc:
+                # Restart for multi_master failover when daemonized
+                if self.options.daemon:
+                    continue
+            break
+
+    def _real_start(self):
         try:
-            self.prepare()
             if check_user(self.config['user']):
-                logger.info('The salt minion is starting up')
+                self.action_log_info('Starting up')
+                self.verify_hash_type()
                 self.minion.tune_in()
-        except (KeyboardInterrupt, SaltSystemExit) as exc:
-            logger.warn('Stopping the Salt Minion')
-            if isinstance(exc, KeyboardInterrupt):
-                logger.warn('Exiting on Ctrl-c')
+                if self.minion.restart:
+                    raise SaltClientError('Minion could not connect to Master')
+        except (KeyboardInterrupt, SaltSystemExit) as error:
+            self.action_log_info('Stopping')
+            if isinstance(error, KeyboardInterrupt):
+                log.warning('Exiting on Ctrl-c')
                 self.shutdown()
             else:
-                logger.error(str(exc))
-                self.shutdown(exc.code)
+                log.error(error)
+                self.shutdown(error.code)
 
     def call(self, cleanup_protecteds):
         '''
@@ -311,48 +364,61 @@ class Minion(parsers.MinionOptionParser):  # pylint: disable=no-init
             self.prepare()
             if check_user(self.config['user']):
                 self.minion.opts['__role'] = kinds.APPL_KIND_NAMES[kinds.applKinds.caller]
-                self.minion.opts['raet_cleanup_protecteds'] = cleanup_protecteds
                 self.minion.call_in()
         except (KeyboardInterrupt, SaltSystemExit) as exc:
-            logger.warn('Stopping the Salt Minion')
+            self.action_log_info('Stopping')
             if isinstance(exc, KeyboardInterrupt):
-                logger.warn('Exiting on Ctrl-c')
+                log.warning('Exiting on Ctrl-c')
                 self.shutdown()
             else:
-                logger.error(str(exc))
+                log.error(exc)
                 self.shutdown(exc.code)
 
     def shutdown(self, exitcode=0, exitmsg=None):
         '''
         If sub-classed, run any shutdown operations on this method.
+
+        :param exitcode
+        :param exitmsg
         '''
-        logger.info('The salt minion is shut down')
-        self.exit(exitcode, exitmsg)
+        self.action_log_info('Shutting down')
+        if hasattr(self, 'minion') and hasattr(self.minion, 'destroy'):
+            self.minion.destroy()
+        super(Minion, self).shutdown(
+            exitcode, ('The Salt {0} is shutdown. {1}'.format(
+                self.__class__.__name__, (exitmsg or '')).strip()))
     # pylint: enable=no-member
 
 
-class ProxyMinion(parsers.ProxyMinionOptionParser):  # pylint: disable=no-init
+class ProxyMinion(salt.utils.parsers.ProxyMinionOptionParser, DaemonsMixin):  # pylint: disable=no-init
     '''
     Create a proxy minion server
     '''
 
+    def _handle_signals(self, signum, sigframe):  # pylint: disable=unused-argument
+        # escalate signal to the process manager processes
+        self.minion.stop(signum)
+        super(ProxyMinion, self)._handle_signals(signum, sigframe)
+
     # pylint: disable=no-member
     def prepare(self):
         '''
-        Run the preparation sequence required to start a salt minion.
+        Run the preparation sequence required to start a salt proxy minion.
 
         If sub-classed, don't **ever** forget to run:
 
             super(YourSubClass, self).prepare()
         '''
-        self.parse_args()
+        super(ProxyMinion, self).prepare()
 
         if not self.values.proxyid:
-            raise SaltSystemExit('salt-proxy requires --proxyid')
+            self.error('salt-proxy requires --proxyid')
 
         # Proxies get their ID from the command line.  This may need to change in
         # the future.
-        self.config['id'] = self.values.proxyid
+        # We used to set this here.  Now it is set in ProxyMinionOptionParser
+        # by passing it via setup_config to config.minion_config
+        # self.config['id'] = self.values.proxyid
 
         try:
             if self.config['verify_env']:
@@ -371,7 +437,7 @@ class ProxyMinion(parsers.ProxyMinionOptionParser):  # pylint: disable=no-init
                         )
                 else:
                     confd = os.path.join(
-                        os.path.dirname(self.config['conf_file']), 'minion.d'
+                        os.path.dirname(self.config['conf_file']), 'proxy.d'
                     )
 
                 v_dirs = [
@@ -382,60 +448,39 @@ class ProxyMinion(parsers.ProxyMinionOptionParser):  # pylint: disable=no-init
                     confd,
                 ]
 
-                if self.config.get('transport') == 'raet':
-                    v_dirs.append(os.path.join(self.config['pki_dir'], 'accepted'))
-                    v_dirs.append(os.path.join(self.config['pki_dir'], 'pending'))
-                    v_dirs.append(os.path.join(self.config['pki_dir'], 'rejected'))
-                    v_dirs.append(os.path.join(self.config['cachedir'], 'raet'))
-
                 verify_env(
                     v_dirs,
                     self.config['user'],
                     permissive=self.config['permissive_pki_access'],
+                    root_dir=self.config['root_dir'],
                     pki_dir=self.config['pki_dir'],
                 )
-                if 'proxy_log' in self.config:
-                    logfile = self.config['proxy_log']
-                else:
-                    logfile = self.config['log_file']
-                if logfile is not None and not logfile.startswith(('tcp://',
-                                                                   'udp://',
-                                                                   'file://')):
-                    # Logfile is not using Syslog, verify
-                    current_umask = os.umask(0o027)
-                    verify_files([logfile], self.config['user'])
-                    os.umask(current_umask)
-
-        except OSError as err:
-            logger.exception('Failed to prepare salt environment')
-            self.shutdown(err.errno)
+        except OSError as error:
+            self.environment_failure(error)
 
         self.setup_logfile_logger()
         verify_log(self.config)
-        logger.info(
-            'Setting up a Salt Proxy Minion "{0}"'.format(
-                self.config['id']
-            )
-        )
+        self.action_log_info('Setting up "{0}"'.format(self.config['id']))
+
         migrations.migrate_paths(self.config)
+
+        # Bail out if we find a process running and it matches out pidfile
+        if self.check_running():
+            self.action_log_info('An instance is already running. Exiting')
+            self.shutdown(1)
+
         # TODO: AIO core is separate from transport
-        if self.config['transport'].lower() in ('zeromq', 'tcp'):
-            # Late import so logging works correctly
-            import salt.minion
-            # If the minion key has not been accepted, then Salt enters a loop
-            # waiting for it, if we daemonize later then the minion could halt
-            # the boot process waiting for a key to be accepted on the master.
-            # This is the latest safe place to daemonize
-            self.daemonize_if_required()
-            self.set_pidfile()
-            # TODO Proxy minions don't currently support failover
-            self.minion = salt.minion.ProxyMinion(self.config)
-        else:
-            # For proxy minions, this doesn't work yet.
-            import salt.daemons.flo
-            self.daemonize_if_required()
-            self.set_pidfile()
-            self.minion = salt.daemons.flo.IofloMinion(self.config)
+        # Late import so logging works correctly
+        import salt.minion
+        # If the minion key has not been accepted, then Salt enters a loop
+        # waiting for it, if we daemonize later then the minion could halt
+        # the boot process waiting for a key to be accepted on the master.
+        # This is the latest safe place to daemonize
+        self.daemonize_if_required()
+        self.set_pidfile()
+        if self.config.get('master_type') == 'func':
+            salt.minion.eval_master_func(self.config)
+        self.minion = salt.minion.ProxyMinionManager(self.config)
 
     def start(self):
         '''
@@ -447,33 +492,41 @@ class ProxyMinion(parsers.ProxyMinionOptionParser):  # pylint: disable=no-init
 
         NOTE: Run any required code before calling `super()`.
         '''
+        super(ProxyMinion, self).start()
         try:
-            self.prepare()
             if check_user(self.config['user']):
-                logger.info('The proxy minion is starting up')
+                self.action_log_info('The Proxy Minion is starting up')
+                self.verify_hash_type()
                 self.minion.tune_in()
+                if self.minion.restart:
+                    raise SaltClientError('Proxy Minion could not connect to Master')
         except (KeyboardInterrupt, SaltSystemExit) as exc:
-            logger.warn('Stopping the Salt Proxy Minion')
+            self.action_log_info('Proxy Minion Stopping')
             if isinstance(exc, KeyboardInterrupt):
-                logger.warn('Exiting on Ctrl-c')
+                log.warning('Exiting on Ctrl-c')
                 self.shutdown()
             else:
-                logger.error(str(exc))
+                log.error(exc)
                 self.shutdown(exc.code)
 
     def shutdown(self, exitcode=0, exitmsg=None):
         '''
         If sub-classed, run any shutdown operations on this method.
+
+        :param exitcode
+        :param exitmsg
         '''
         if hasattr(self, 'minion') and 'proxymodule' in self.minion.opts:
             proxy_fn = self.minion.opts['proxymodule'].loaded_base_name + '.shutdown'
             self.minion.opts['proxymodule'][proxy_fn](self.minion.opts)
-        logger.info('The proxy minion is shut down')
-        self.exit(exitcode, exitmsg)
+        self.action_log_info('Shutting down')
+        super(ProxyMinion, self).shutdown(
+            exitcode, ('The Salt {0} is shutdown. {1}'.format(
+                self.__class__.__name__, (exitmsg or '')).strip()))
     # pylint: enable=no-member
 
 
-class Syndic(parsers.SyndicOptionParser):
+class Syndic(salt.utils.parsers.SyndicOptionParser, DaemonsMixin):  # pylint: disable=no-init
     '''
     Create a syndic server
     '''
@@ -486,7 +539,7 @@ class Syndic(parsers.SyndicOptionParser):
 
             super(YourSubClass, self).prepare()
         '''
-        self.parse_args()
+        super(Syndic, self).prepare()
         try:
             if self.config['verify_env']:
                 verify_env(
@@ -498,34 +551,20 @@ class Syndic(parsers.SyndicOptionParser):
                     ],
                     self.config['user'],
                     permissive=self.config['permissive_pki_access'],
+                    root_dir=self.config['root_dir'],
                     pki_dir=self.config['pki_dir'],
                 )
-                logfile = self.config['log_file']
-                if logfile is not None and not logfile.startswith(('tcp://',
-                                                                   'udp://',
-                                                                   'file://')):
-                    # Logfile is not using Syslog, verify
-                    verify_files([logfile], self.config['user'])
-        except OSError as err:
-            logger.exception('Failed to prepare salt environment')
-            self.shutdown(err.errno)
+        except OSError as error:
+            self.environment_failure(error)
 
         self.setup_logfile_logger()
         verify_log(self.config)
-        logger.info(
-            'Setting up the Salt Syndic Minion "{0}"'.format(
-                self.config['id']
-            )
-        )
+        self.action_log_info('Setting up "{0}"'.format(self.config['id']))
 
         # Late import so logging works correctly
         import salt.minion
         self.daemonize_if_required()
-        # if its a multisyndic, do so
-        if isinstance(self.config.get('master'), list):
-            self.syndic = salt.minion.MultiSyndic(self.config)
-        else:
-            self.syndic = salt.minion.Syndic(self.config)
+        self.syndic = salt.minion.SyndicManager(self.config)
         self.set_pidfile()
 
     def start(self):
@@ -538,18 +577,24 @@ class Syndic(parsers.SyndicOptionParser):
 
         NOTE: Run any required code before calling `super()`.
         '''
-        self.prepare()
+        super(Syndic, self).start()
         if check_user(self.config['user']):
-            logger.info('The salt syndic is starting up')
+            self.action_log_info('Starting up')
+            self.verify_hash_type()
             try:
                 self.syndic.tune_in()
             except KeyboardInterrupt:
-                logger.warn('Stopping the Salt Syndic Minion')
+                self.action_log_info('Stopping')
                 self.shutdown()
 
     def shutdown(self, exitcode=0, exitmsg=None):
         '''
         If sub-classed, run any shutdown operations on this method.
+
+        :param exitcode
+        :param exitmsg
         '''
-        logger.info('The salt syndic is shut down')
-        self.exit(exitcode, exitmsg)
+        self.action_log_info('Shutting down')
+        super(Syndic, self).shutdown(
+            exitcode, ('The Salt {0} is shutdown. {1}'.format(
+                self.__class__.__name__, (exitmsg or '')).strip()))

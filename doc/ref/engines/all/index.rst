@@ -1,8 +1,8 @@
 .. _all-salt.engines:
 
-===================================
-Full list of builtin engine modules
-===================================
+==============
+engine modules
+==============
 
 .. currentmodule:: salt.engines
 
@@ -10,6 +10,20 @@ Full list of builtin engine modules
     :toctree:
     :template: autosummary.rst.tmpl
 
-    logstash
+    docker_events
+    http_logstash
+    ircbot
+    junos_syslog
+    libvirt_events
+    logentries
+    logstash_engine
+    napalm_syslog
+    reactor
+    redis_sentinel
+    script
+    slack
     sqs_events
+    stalekey
     test
+    thorium
+    webhook

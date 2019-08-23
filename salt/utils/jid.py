@@ -1,21 +1,42 @@
 # -*- coding: utf-8 -*-
-from __future__ import absolute_import
-from __future__ import print_function
-
+'''
+Functions for creating and working with job IDs
+'''
+from __future__ import absolute_import, print_function, unicode_literals
 from calendar import month_abbr as months
 import datetime
 import hashlib
 import os
 
-import salt.utils
+import salt.utils.stringutils
 from salt.ext import six
 
+LAST_JID_DATETIME = None
 
-def gen_jid():
+
+def gen_jid(opts=None):
     '''
     Generate a jid
     '''
-    return '{0:%Y%m%d%H%M%S%f}'.format(datetime.datetime.now())
+    if opts is None:
+        salt.utils.versions.warn_until(
+            'Sodium',
+            'The `opts` argument was not passed into salt.utils.jid.gen_jid(). '
+            'This will be required starting in {version}.'
+        )
+        opts = {}
+    global LAST_JID_DATETIME  # pylint: disable=global-statement
+
+    if opts.get('utc_jid', False):
+        jid_dt = datetime.datetime.utcnow()
+    else:
+        jid_dt = datetime.datetime.now()
+    if not opts.get('unique_jid', False):
+        return '{0:%Y%m%d%H%M%S%f}'.format(jid_dt)
+    if LAST_JID_DATETIME and LAST_JID_DATETIME >= jid_dt:
+        jid_dt = LAST_JID_DATETIME + datetime.timedelta(microseconds=1)
+    LAST_JID_DATETIME = jid_dt
+    return '{0:%Y%m%d%H%M%S%f}_{1}'.format(jid_dt, os.getpid())
 
 
 def is_jid(jid):
@@ -24,54 +45,21 @@ def is_jid(jid):
     '''
     if not isinstance(jid, six.string_types):
         return False
-    if len(jid) != 20:
+    if len(jid) != 20 and (len(jid) <= 21 or jid[20] != '_'):
         return False
     try:
-        int(jid)
+        int(jid[:20])
         return True
     except ValueError:
         return False
-
-
-def jid_dir(jid, cachedir, sum_type):
-    '''
-    Return the jid_dir for the given job id
-    '''
-    salt.utils.warn_until(
-    'Boron',
-    'All job_cache management has been moved into the local_cache '
-    'returner, this util function will be removed-- please use '
-    'the returner'
-    )
-    jid = salt.utils.to_bytes(str(jid)) if six.PY3 else str(jid)
-    jhash = getattr(hashlib, sum_type)(jid).hexdigest()
-    return os.path.join(cachedir, 'jobs', jhash[:2], jhash[2:])
-
-
-def jid_load(jid, cachedir, sum_type, serial='msgpack'):
-    '''
-    Return the load data for a given job id
-    '''
-    salt.utils.warn_until(
-                    'Boron',
-                    'Getting the load has been moved into the returner interface '
-                    'please get the data from the master_job_cache '
-                )
-    _dir = jid_dir(jid, cachedir, sum_type)
-    load_fn = os.path.join(_dir, '.load.p')
-    if not os.path.isfile(load_fn):
-        return {}
-    serial = salt.payload.Serial(serial)
-    with salt.utils.fopen(load_fn, 'rb') as fp_:
-        return serial.load(fp_)
 
 
 def jid_to_time(jid):
     '''
     Convert a salt job id into the time when the job was invoked
     '''
-    jid = str(jid)
-    if len(jid) != 20:
+    jid = six.text_type(jid)
+    if len(jid) != 20 and (len(jid) <= 21 or jid[20] != '_'):
         return ''
     year = jid[:4]
     month = jid[4:6]
@@ -79,7 +67,7 @@ def jid_to_time(jid):
     hour = jid[8:10]
     minute = jid[10:12]
     second = jid[12:14]
-    micro = jid[14:]
+    micro = jid[14:20]
 
     ret = '{0}, {1} {2} {3}:{4}:{5}.{6}'.format(year,
                                                 months[int(month)],
@@ -99,7 +87,7 @@ def format_job_instance(job):
            'Arguments': list(job.get('arg', [])),
            # unlikely but safeguard from invalid returns
            'Target': job.get('tgt', 'unknown-target'),
-           'Target-type': job.get('tgt_type', []),
+           'Target-type': job.get('tgt_type', 'list'),
            'User': job.get('user', 'root')}
 
     if 'metadata' in job:
@@ -129,3 +117,19 @@ def format_jid_instance_ext(jid, job):
         'JID': jid,
         'StartTime': jid_to_time(jid)})
     return ret
+
+
+def jid_dir(jid, job_dir=None, hash_type='sha256'):
+    '''
+    Return the jid_dir for the given job id
+    '''
+    if not isinstance(jid, six.string_types):
+        jid = six.text_type(jid)
+    jhash = getattr(hashlib, hash_type)(
+        salt.utils.stringutils.to_bytes(jid)).hexdigest()
+
+    parts = []
+    if job_dir is not None:
+        parts.append(job_dir)
+    parts.extend([jhash[:2], jhash[2:]])
+    return os.path.join(*parts)

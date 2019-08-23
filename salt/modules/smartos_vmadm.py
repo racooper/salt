@@ -2,11 +2,10 @@
 '''
 Module for running vmadm command on SmartOS
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals, print_function
 
 # Import Python libs
 import logging
-import json
 import os
 try:
     from shlex import quote as _quote_args  # pylint: disable=E0611
@@ -14,9 +13,16 @@ except ImportError:
     from pipes import quote as _quote_args
 
 # Import Salt libs
-import salt.utils
-import salt.utils.decorators as decorators
+import salt.utils.args
+import salt.utils.files
+import salt.utils.json
+import salt.utils.path
+import salt.utils.platform
+import salt.utils.stringutils
 from salt.utils.odict import OrderedDict
+
+# Import 3rd-party libs
+from salt.ext import six
 
 log = logging.getLogger(__name__)
 
@@ -29,28 +35,20 @@ __func_alias__ = {
 __virtualname__ = 'vmadm'
 
 
-@decorators.memoize
-def _check_vmadm():
-    '''
-    Looks to see if vmadm is present on the system
-    '''
-    return salt.utils.which('vmadm')
-
-
-def _check_zfs():
-    '''
-    Looks to see if zfs is present on the system
-    '''
-    return salt.utils.which('zfs')
-
-
 def __virtual__():
     '''
     Provides vmadm on SmartOS
     '''
-    if salt.utils.is_smartos_globalzone() and _check_vmadm():
+    if salt.utils.platform.is_smartos_globalzone() and \
+            salt.utils.path.which('vmadm') and \
+            salt.utils.path.which('zfs'):
         return __virtualname__
-    return False
+    return (
+        False,
+        '{0} module can only be loaded on SmartOS compute nodes'.format(
+            __virtualname__
+        )
+    )
 
 
 def _exit_status(retcode):
@@ -68,13 +66,11 @@ def _create_update_from_file(mode='create', uuid=None, path=None):
     Create vm from file
     '''
     ret = {}
-    vmadm = _check_vmadm()
     if not os.path.isfile(path) or path is None:
         ret['Error'] = 'File ({0}) does not exists!'.format(path)
         return ret
     # vmadm validate create|update [-f <filename>]
-    cmd = '{vmadm} validate {mode} {brand} -f {path}'.format(
-        vmadm=vmadm,
+    cmd = 'vmadm validate {mode} {brand} -f {path}'.format(
         mode=mode,
         brand=get(uuid)['brand'] if uuid is not None else '',
         path=path
@@ -85,13 +81,12 @@ def _create_update_from_file(mode='create', uuid=None, path=None):
         ret['Error'] = _exit_status(retcode)
         if 'stderr' in res:
             if res['stderr'][0] == '{':
-                ret['Error'] = json.loads(res['stderr'])
+                ret['Error'] = salt.utils.json.loads(res['stderr'])
             else:
                 ret['Error'] = res['stderr']
         return ret
     # vmadm create|update [-f <filename>]
-    cmd = '{vmadm} {mode} {uuid} -f {path}'.format(
-        vmadm=vmadm,
+    cmd = 'vmadm {mode} {uuid} -f {path}'.format(
         mode=mode,
         uuid=uuid if uuid is not None else '',
         path=path
@@ -102,7 +97,7 @@ def _create_update_from_file(mode='create', uuid=None, path=None):
         ret['Error'] = _exit_status(retcode)
         if 'stderr' in res:
             if res['stderr'][0] == '{':
-                ret['Error'] = json.loads(res['stderr'])
+                ret['Error'] = salt.utils.json.loads(res['stderr'])
             else:
                 ret['Error'] = res['stderr']
         return ret
@@ -117,13 +112,17 @@ def _create_update_from_cfg(mode='create', uuid=None, vmcfg=None):
     Create vm from configuration
     '''
     ret = {}
-    vmadm = _check_vmadm()
+
+    # write json file
+    vmadm_json_file = __salt__['temp.file'](prefix='vmadm-')
+    with salt.utils.files.fopen(vmadm_json_file, 'w') as vmadm_json:
+        salt.utils.json.dump(vmcfg, vmadm_json)
+
     # vmadm validate create|update [-f <filename>]
-    cmd = 'echo {vmcfg} | {vmadm} validate {mode} {brand}'.format(
-        vmadm=vmadm,
+    cmd = 'vmadm validate {mode} {brand} -f {vmadm_json_file}'.format(
         mode=mode,
         brand=get(uuid)['brand'] if uuid is not None else '',
-        vmcfg=_quote_args(json.dumps(vmcfg))
+        vmadm_json_file=vmadm_json_file
     )
     res = __salt__['cmd.run_all'](cmd, python_shell=True)
     retcode = res['retcode']
@@ -131,16 +130,15 @@ def _create_update_from_cfg(mode='create', uuid=None, vmcfg=None):
         ret['Error'] = _exit_status(retcode)
         if 'stderr' in res:
             if res['stderr'][0] == '{':
-                ret['Error'] = json.loads(res['stderr'])
+                ret['Error'] = salt.utils.json.loads(res['stderr'])
             else:
                 ret['Error'] = res['stderr']
         return ret
     # vmadm create|update [-f <filename>]
-    cmd = 'echo {vmcfg} | {vmadm} {mode} {uuid}'.format(
-        vmadm=vmadm,
+    cmd = 'vmadm {mode} {uuid} -f {vmadm_json_file}'.format(
         mode=mode,
         uuid=uuid if uuid is not None else '',
-        vmcfg=_quote_args(json.dumps(vmcfg))
+        vmadm_json_file=vmadm_json_file
     )
     res = __salt__['cmd.run_all'](cmd, python_shell=True)
     retcode = res['retcode']
@@ -148,26 +146,31 @@ def _create_update_from_cfg(mode='create', uuid=None, vmcfg=None):
         ret['Error'] = _exit_status(retcode)
         if 'stderr' in res:
             if res['stderr'][0] == '{':
-                ret['Error'] = json.loads(res['stderr'])
+                ret['Error'] = salt.utils.json.loads(res['stderr'])
             else:
                 ret['Error'] = res['stderr']
         return ret
     else:
+        # cleanup json file (only when successful to help troubleshooting)
+        salt.utils.files.safe_rm(vmadm_json_file)
+
+        # return uuid
         if res['stderr'].startswith('Successfully created VM'):
             return res['stderr'][24:]
+
     return True
 
 
-def start(vm=None, options=None, key='uuid'):
+def start(vm, options=None, key='uuid'):
     '''
     Start a vm
 
     vm : string
-        Specifies the vm to be started
+        vm to be started
     options : string
-        Specifies additional options
-    key : string
-        Specifies if 'vm' is a uuid, alias or hostname.
+        optional additional options
+    key : string [uuid|alias|hostname]
+        value type of 'vm' parameter
 
     CLI Example:
 
@@ -179,10 +182,6 @@ def start(vm=None, options=None, key='uuid'):
         salt '*' vmadm.start vm=nina.example.org key=hostname
     '''
     ret = {}
-    vmadm = _check_vmadm()
-    if vm is None:
-        ret['Error'] = 'uuid, alias or hostname must be provided'
-        return ret
     if key not in ['uuid', 'alias', 'hostname']:
         ret['Error'] = 'Key must be either uuid, alias or hostname'
         return ret
@@ -190,8 +189,7 @@ def start(vm=None, options=None, key='uuid'):
     if 'Error' in vm:
         return vm
     # vmadm start <uuid> [option=value ...]
-    cmd = '{vmadm} start {uuid} {options}'.format(
-        vmadm=vmadm,
+    cmd = 'vmadm start {uuid} {options}'.format(
         uuid=vm,
         options=options if options else ''
     )
@@ -203,16 +201,16 @@ def start(vm=None, options=None, key='uuid'):
     return True
 
 
-def stop(vm=None, force=False, key='uuid'):
+def stop(vm, force=False, key='uuid'):
     '''
     Stop a vm
 
     vm : string
-        Specifies the vm to be stopped
+        vm to be stopped
     force : boolean
-        Specifies if the vm should be force stopped
-    key : string
-        Specifies if 'vm' is a uuid, alias or hostname.
+        force stop of vm if true
+    key : string [uuid|alias|hostname]
+        value type of 'vm' parameter
 
     CLI Example:
 
@@ -224,10 +222,6 @@ def stop(vm=None, force=False, key='uuid'):
         salt '*' vmadm.stop vm=nina.example.org key=hostname
     '''
     ret = {}
-    vmadm = _check_vmadm()
-    if vm is None:
-        ret['Error'] = 'uuid, alias or hostname must be provided'
-        return ret
     if key not in ['uuid', 'alias', 'hostname']:
         ret['Error'] = 'Key must be either uuid, alias or hostname'
         return ret
@@ -235,8 +229,7 @@ def stop(vm=None, force=False, key='uuid'):
     if 'Error' in vm:
         return vm
     # vmadm stop <uuid> [-F]
-    cmd = '{vmadm} stop {force} {uuid}'.format(
-        vmadm=vmadm,
+    cmd = 'vmadm stop {force} {uuid}'.format(
         force='-F' if force else '',
         uuid=vm
     )
@@ -248,16 +241,16 @@ def stop(vm=None, force=False, key='uuid'):
     return True
 
 
-def reboot(vm=None, force=False, key='uuid'):
+def reboot(vm, force=False, key='uuid'):
     '''
     Reboot a vm
 
     vm : string
-        Specifies the vm to be rebooted
+        vm to be rebooted
     force : boolean
-        Specifies if the vm should be force rebooted
-    key : string
-        Specifies if 'vm' is a uuid, alias or hostname.
+        force reboot of vm if true
+    key : string [uuid|alias|hostname]
+        value type of 'vm' parameter
 
     CLI Example:
 
@@ -269,10 +262,6 @@ def reboot(vm=None, force=False, key='uuid'):
         salt '*' vmadm.reboot vm=nina.example.org key=hostname
     '''
     ret = {}
-    vmadm = _check_vmadm()
-    if vm is None:
-        ret['Error'] = 'uuid, alias or hostname must be provided'
-        return ret
     if key not in ['uuid', 'alias', 'hostname']:
         ret['Error'] = 'Key must be either uuid, alias or hostname'
         return ret
@@ -280,8 +269,7 @@ def reboot(vm=None, force=False, key='uuid'):
     if 'Error' in vm:
         return vm
     # vmadm reboot <uuid> [-F]
-    cmd = '{vmadm} reboot {force} {uuid}'.format(
-        vmadm=vmadm,
+    cmd = 'vmadm reboot {force} {uuid}'.format(
         force='-F' if force else '',
         uuid=vm
     )
@@ -293,21 +281,20 @@ def reboot(vm=None, force=False, key='uuid'):
     return True
 
 
-def list_vms(search=None, sort=None, order='uuid,type,ram,state,alias', keyed=False):
+def list_vms(search=None, sort=None, order='uuid,type,ram,state,alias', keyed=True):
     '''
     Return a list of VMs
 
     search : string
-        Specifies the vmadm filter property
+        vmadm filter property
     sort : string
-        Specifies the vmadm sort (-s) property
+        vmadm sort (-s) property
     order : string
-        Specifies the vmadm order (-o) property
-        Default: uuid,type,ram,state,alias
+        vmadm order (-o) property -- Default: uuid,type,ram,state,alias
     keyed : boolean
-        Specified if the output should be an array (False) or dict (True)
-          Dict key is first field from order parameter
-          Note: if key is not unique last vm wins.
+        specified if the output should be an array (False) or dict (True)
+            For a dict the key is the first item from the order parameter.
+            Note: If key is not unique last vm wins.
 
     CLI Example:
 
@@ -318,10 +305,8 @@ def list_vms(search=None, sort=None, order='uuid,type,ram,state,alias', keyed=Fa
         salt '*' vmadm.list search='type=KVM'
     '''
     ret = {}
-    vmadm = _check_vmadm()
     # vmadm list [-p] [-H] [-o field,...] [-s field,...] [field=value ...]
-    cmd = '{vmadm} list -p -H {order} {sort} {search}'.format(
-        vmadm=vmadm,
+    cmd = 'vmadm list -p -H {order} {sort} {search}'.format(
         order='-o {0}'.format(order) if order else '',
         sort='-s {0}'.format(sort) if sort else '',
         search=search if search else ''
@@ -359,12 +344,11 @@ def lookup(search=None, order=None, one=False):
     Return a list of VMs using lookup
 
     search : string
-        Specifies the vmadm filter property
+        vmadm filter property
     order : string
-        Specifies the vmadm order (-o) property
-        Default: uuid,type,ram,state,alias
+        vmadm order (-o) property -- Default: uuid,type,ram,state,alias
     one : boolean
-        Specifies if you to one result only (-1)
+        return only one result (vmadm's -1)
 
     CLI Example:
 
@@ -375,10 +359,8 @@ def lookup(search=None, order=None, one=False):
         salt '*' vmadm.lookup search='alias=nacl' one=True
     '''
     ret = {}
-    vmadm = _check_vmadm()
     # vmadm lookup [-j|-1] [-o field,...] [field=value ...]
-    cmd = '{vmadm} lookup {one} {order} {search}'.format(
-        vmadm=vmadm,
+    cmd = 'vmadm lookup {one} {order} {search}'.format(
         one='-1' if one else '-j',
         order='-o {0}'.format(order) if order else '',
         search=search if search else ''
@@ -393,22 +375,22 @@ def lookup(search=None, order=None, one=False):
     if one:
         result = res['stdout']
     else:
-        for vm in json.loads(res['stdout']):
+        for vm in salt.utils.json.loads(res['stdout']):
             result.append(vm)
 
     return result
 
 
-def sysrq(vm=None, action='nmi', key='uuid'):
+def sysrq(vm, action='nmi', key='uuid'):
     '''
-    Send non-maskable interupt to vm or capture a screenshot
+    Send non-maskable interrupt to vm or capture a screenshot
 
     vm : string
-        Specifies the vm
+        vm to be targeted
     action : string
-        Specifies the action nmi or screenshot
-    key : string
-        Specifies what 'vm' is. Value = uuid|alias|hostname
+        nmi or screenshot -- Default: nmi
+    key : string [uuid|alias|hostname]
+        value type of 'vm' parameter
 
     CLI Example:
 
@@ -419,10 +401,6 @@ def sysrq(vm=None, action='nmi', key='uuid'):
         salt '*' vmadm.sysrq nacl nmi key=alias
     '''
     ret = {}
-    vmadm = _check_vmadm()
-    if vm is None:
-        ret['Error'] = 'uuid, alias or hostname must be provided'
-        return ret
     if key not in ['uuid', 'alias', 'hostname']:
         ret['Error'] = 'Key must be either uuid, alias or hostname'
         return ret
@@ -433,8 +411,7 @@ def sysrq(vm=None, action='nmi', key='uuid'):
     if 'Error' in vm:
         return vm
     # vmadm sysrq <uuid> <nmi|screenshot>
-    cmd = '{vmadm} sysrq {uuid} {action}'.format(
-        vmadm=vmadm,
+    cmd = 'vmadm sysrq {uuid} {action}'.format(
         uuid=vm,
         action=action
     )
@@ -446,14 +423,14 @@ def sysrq(vm=None, action='nmi', key='uuid'):
     return True
 
 
-def delete(vm=None, key='uuid'):
+def delete(vm, key='uuid'):
     '''
     Delete a vm
 
     vm : string
-        Specifies the vm
-    key : string
-        Specifies what 'vm' is. Value = uuid|alias|hostname
+        vm to be deleted
+    key : string [uuid|alias|hostname]
+        value type of 'vm' parameter
 
     CLI Example:
 
@@ -463,10 +440,6 @@ def delete(vm=None, key='uuid'):
         salt '*' vmadm.delete nacl key=alias
     '''
     ret = {}
-    vmadm = _check_vmadm()
-    if vm is None:
-        ret['Error'] = 'uuid, alias or hostname must be provided'
-        return ret
     if key not in ['uuid', 'alias', 'hostname']:
         ret['Error'] = 'Key must be either uuid, alias or hostname'
         return ret
@@ -474,10 +447,7 @@ def delete(vm=None, key='uuid'):
     if 'Error' in vm:
         return vm
     # vmadm delete <uuid>
-    cmd = '{vmadm} delete {uuid}'.format(
-        vmadm=vmadm,
-        uuid=vm
-    )
+    cmd = 'vmadm delete {0}'.format(vm)
     res = __salt__['cmd.run_all'](cmd)
     retcode = res['retcode']
     if retcode != 0:
@@ -486,14 +456,14 @@ def delete(vm=None, key='uuid'):
     return True
 
 
-def get(vm=None, key='uuid'):
+def get(vm, key='uuid'):
     '''
     Output the JSON object describing a VM
 
     vm : string
-        Specifies the vm
-    key : string
-        Specifies what 'vm' is. Value = uuid|alias|hostname
+        vm to be targeted
+    key : string [uuid|alias|hostname]
+        value type of 'vm' parameter
 
     CLI Example:
 
@@ -503,10 +473,6 @@ def get(vm=None, key='uuid'):
         salt '*' vmadm.get nacl key=alias
     '''
     ret = {}
-    vmadm = _check_vmadm()
-    if vm is None:
-        ret['Error'] = 'uuid, alias or hostname must be provided'
-        return ret
     if key not in ['uuid', 'alias', 'hostname']:
         ret['Error'] = 'Key must be either uuid, alias or hostname'
         return ret
@@ -514,29 +480,25 @@ def get(vm=None, key='uuid'):
     if 'Error' in vm:
         return vm
     # vmadm get <uuid>
-    cmd = '{vmadm} get {uuid}'.format(
-        vmadm=vmadm,
-        uuid=vm
-    )
+    cmd = 'vmadm get {0}'.format(vm)
     res = __salt__['cmd.run_all'](cmd)
     retcode = res['retcode']
     if retcode != 0:
         ret['Error'] = res['stderr'] if 'stderr' in res else _exit_status(retcode)
         return ret
-    return json.loads(res['stdout'])
+    return salt.utils.json.loads(res['stdout'])
 
 
-def info(vm=None, info_type='all', key='uuid'):
+def info(vm, info_type='all', key='uuid'):
     '''
     Lookup info on running kvm
 
     vm : string
-        Specifies the vm
-    info_type : string
-        Specifies what info to return.
-        Value = all|block|blockstats|chardev|cpus|kvm|pci|spice|version|vnc
-    key : string
-        Specifies what 'vm' is. Value = uuid|alias|hostname
+        vm to be targeted
+    info_type : string [all|block|blockstats|chardev|cpus|kvm|pci|spice|version|vnc]
+        info type to return
+    key : string [uuid|alias|hostname]
+        value type of 'vm' parameter
 
     CLI Example:
 
@@ -548,10 +510,6 @@ def info(vm=None, info_type='all', key='uuid'):
         salt '*' vmadm.info nacl vnc key=alias
     '''
     ret = {}
-    vmadm = _check_vmadm()
-    if vm is None:
-        ret['Error'] = 'uuid, alias or hostname must be provided'
-        return ret
     if info_type not in ['all', 'block', 'blockstats', 'chardev', 'cpus', 'kvm', 'pci', 'spice', 'version', 'vnc']:
         ret['Error'] = 'Requested info_type is not available'
         return ret
@@ -562,8 +520,7 @@ def info(vm=None, info_type='all', key='uuid'):
     if 'Error' in vm:
         return vm
     # vmadm info <uuid> [type,...]
-    cmd = '{vmadm} info {uuid} {type}'.format(
-        vmadm=vmadm,
+    cmd = 'vmadm info {uuid} {type}'.format(
         uuid=vm,
         type=info_type
     )
@@ -572,22 +529,22 @@ def info(vm=None, info_type='all', key='uuid'):
     if retcode != 0:
         ret['Error'] = res['stderr'] if 'stderr' in res else _exit_status(retcode)
         return ret
-    return json.loads(res['stdout'])
+    return salt.utils.json.loads(res['stdout'])
 
 
-def create_snapshot(vm=None, name=None, key='uuid'):
+def create_snapshot(vm, name, key='uuid'):
     '''
     Create snapshot of a vm
 
     vm : string
-        Specifies the vm
+        vm to be targeted
     name : string
-        Name of snapshot.
-        The snapname must be 64 characters or less
-        and must only contain alphanumeric characters and
-        characters in the set [-_.:%] to comply with ZFS restrictions.
-    key : string
-        Specifies what 'vm' is. Value = uuid|alias|hostname
+        snapshot name
+            The snapname must be 64 characters or less
+            and must only contain alphanumeric characters and
+            characters in the set [-_.:%] to comply with ZFS restrictions.
+    key : string [uuid|alias|hostname]
+        value type of 'vm' parameter
 
     CLI Example:
 
@@ -597,13 +554,6 @@ def create_snapshot(vm=None, name=None, key='uuid'):
         salt '*' vmadm.create_snapshot nacl baseline key=alias
     '''
     ret = {}
-    vmadm = _check_vmadm()
-    if vm is None:
-        ret['Error'] = 'uuid, alias or hostname must be provided'
-        return ret
-    if name is None:
-        ret['Error'] = 'Snapshot name most be specified'
-        return ret
     if key not in ['uuid', 'alias', 'hostname']:
         ret['Error'] = 'Key must be either uuid, alias or hostname'
         return ret
@@ -621,8 +571,7 @@ def create_snapshot(vm=None, name=None, key='uuid'):
         ret['Error'] = 'VM must be running to take a snapshot'
         return ret
     # vmadm create-snapshot <uuid> <snapname>
-    cmd = '{vmadm} create-snapshot {uuid} {snapshot}'.format(
-        vmadm=vmadm,
+    cmd = 'vmadm create-snapshot {uuid} {snapshot}'.format(
         snapshot=name,
         uuid=vm
     )
@@ -634,19 +583,19 @@ def create_snapshot(vm=None, name=None, key='uuid'):
     return True
 
 
-def delete_snapshot(vm=None, name=None, key='uuid'):
+def delete_snapshot(vm, name, key='uuid'):
     '''
     Delete snapshot of a vm
 
     vm : string
-        Specifies the vm
+        vm to be targeted
     name : string
-        Name of snapshot.
-        The snapname must be 64 characters or less
-        and must only contain alphanumeric characters and
-        characters in the set [-_.:%] to comply with ZFS restrictions.
-    key : string
-        Specifies what 'vm' is. Value = uuid|alias|hostname
+        snapshot name
+            The snapname must be 64 characters or less
+            and must only contain alphanumeric characters and
+            characters in the set [-_.:%] to comply with ZFS restrictions.
+    key : string [uuid|alias|hostname]
+        value type of 'vm' parameter
 
     CLI Example:
 
@@ -656,13 +605,6 @@ def delete_snapshot(vm=None, name=None, key='uuid'):
         salt '*' vmadm.delete_snapshot nacl baseline key=alias
     '''
     ret = {}
-    vmadm = _check_vmadm()
-    if vm is None:
-        ret['Error'] = 'uuid, alias or hostname must be provided'
-        return ret
-    if name is None:
-        ret['Error'] = 'Snapshot name most be specified'
-        return ret
     if key not in ['uuid', 'alias', 'hostname']:
         ret['Error'] = 'Key must be either uuid, alias or hostname'
         return ret
@@ -677,8 +619,7 @@ def delete_snapshot(vm=None, name=None, key='uuid'):
         ret['Error'] = 'VM must be of type OS'
         return ret
     # vmadm delete-snapshot <uuid> <snapname>
-    cmd = '{vmadm} delete-snapshot {uuid} {snapshot}'.format(
-        vmadm=vmadm,
+    cmd = 'vmadm delete-snapshot {uuid} {snapshot}'.format(
         snapshot=name,
         uuid=vm
     )
@@ -690,20 +631,19 @@ def delete_snapshot(vm=None, name=None, key='uuid'):
     return True
 
 
-def rollback_snapshot(vm=None, name=None, key='uuid'):
+def rollback_snapshot(vm, name, key='uuid'):
     '''
     Rollback snapshot of a vm
 
     vm : string
-        Specifies the vm
+        vm to be targeted
     name : string
-        Name of snapshot.
-        The snapname must be 64 characters or less
-        and must only contain alphanumeric characters and
-        characters in the set [-_.:%] to comply with ZFS restrictions.
-
-    key : string
-        Specifies what 'vm' is. Value = uuid|alias|hostname
+        snapshot name
+            The snapname must be 64 characters or less
+            and must only contain alphanumeric characters and
+            characters in the set [-_.:%] to comply with ZFS restrictions.
+    key : string [uuid|alias|hostname]
+        value type of 'vm' parameter
 
     CLI Example:
 
@@ -713,13 +653,6 @@ def rollback_snapshot(vm=None, name=None, key='uuid'):
         salt '*' vmadm.rollback_snapshot nacl baseline key=alias
     '''
     ret = {}
-    vmadm = _check_vmadm()
-    if vm is None:
-        ret['Error'] = 'uuid, alias or hostname must be provided'
-        return ret
-    if name is None:
-        ret['Error'] = 'Snapshot name most be specified'
-        return ret
     if key not in ['uuid', 'alias', 'hostname']:
         ret['Error'] = 'Key must be either uuid, alias or hostname'
         return ret
@@ -734,8 +667,7 @@ def rollback_snapshot(vm=None, name=None, key='uuid'):
         ret['Error'] = 'VM must be of type OS'
         return ret
     # vmadm rollback-snapshot <uuid> <snapname>
-    cmd = '{vmadm} rollback-snapshot {uuid} {snapshot}'.format(
-        vmadm=vmadm,
+    cmd = 'vmadm rollback-snapshot {uuid} {snapshot}'.format(
         snapshot=name,
         uuid=vm
     )
@@ -747,16 +679,16 @@ def rollback_snapshot(vm=None, name=None, key='uuid'):
     return True
 
 
-def reprovision(vm=None, image=None, key='uuid'):
+def reprovision(vm, image, key='uuid'):
     '''
     Reprovision a vm
 
     vm : string
-        Specifies the vm
+        vm to be reprovisioned
     image : string
         uuid of new image
-    key : string
-        Specifies what 'vm' is. Value = uuid|alias|hostname
+    key : string [uuid|alias|hostname]
+        value type of 'vm' parameter
 
     CLI Example:
 
@@ -766,13 +698,6 @@ def reprovision(vm=None, image=None, key='uuid'):
         salt '*' vmadm.reprovision nacl c02a2044-c1bd-11e4-bd8c-dfc1db8b0182 key=alias
     '''
     ret = {}
-    vmadm = _check_vmadm()
-    if vm is None:
-        ret['Error'] = 'uuid, alias or hostname must be provided'
-        return ret
-    if image is None:
-        ret['Error'] = 'Image uuid must be specified'
-        return ret
     if key not in ['uuid', 'alias', 'hostname']:
         ret['Error'] = 'Key must be either uuid, alias or hostname'
         return ret
@@ -783,10 +708,9 @@ def reprovision(vm=None, image=None, key='uuid'):
         ret['Error'] = 'Image ({0}) is not present on this host'.format(image)
         return ret
     # vmadm reprovision <uuid> [-f <filename>]
-    cmd = 'echo {image} | {vmadm} reprovision {uuid}'.format(
-        vmadm=vmadm,
-        uuid=vm,
-        image=_quote_args(json.dumps({'image_uuid': image}))
+    cmd = six.text_type('echo {image} | vmadm reprovision {uuid}').format(
+        uuid=salt.utils.stringutils.to_unicode(vm),
+        image=_quote_args(salt.utils.json.dumps({'image_uuid': image}))
     )
     res = __salt__['cmd.run_all'](cmd, python_shell=True)
     retcode = res['retcode']
@@ -796,17 +720,14 @@ def reprovision(vm=None, image=None, key='uuid'):
     return True
 
 
-def create(**kwargs):
+def create(from_file=None, **kwargs):
     '''
     Create a new vm
 
     from_file : string
-        Specifies the json file to create the vm from.
-        Note: when this is present all other options will be ignored.
-    * : string|int|...
-        Specifies options to set for the vm.
-        Example: image_uuid=UUID, will specify the image_uuid for the vm to be created.
-                 nics='[{"nic_tag": "admin", "ip": "198.51.100.123", "netmask": "255.255.255.0"}]', adds 1 nic over the admin tag
+        json file to create the vm from -- if present, all other options will be ignored
+    kwargs : string|int|...
+        options to set for the vm
 
     CLI Example:
 
@@ -816,36 +737,30 @@ def create(**kwargs):
         salt '*' vmadm.create image_uuid='...' alias='...' nics='[{ "nic_tag": "admin", "ip": "198.51.100.123", ...}, {...}]' [...]
     '''
     ret = {}
-    vmadm = _check_vmadm()
     # prepare vmcfg
     vmcfg = {}
-    for key, value in kwargs.iteritems():
-        if key.startswith('_'):
-            continue
-        vmcfg[key] = value
+    kwargs = salt.utils.args.clean_kwargs(**kwargs)
+    for k, v in six.iteritems(kwargs):
+        vmcfg[k] = v
 
-    if 'from_file' in vmcfg:
-        return _create_update_from_file('create', path=vmcfg['from_file'])
+    if from_file:
+        return _create_update_from_file('create', path=from_file)
     else:
         return _create_update_from_cfg('create', vmcfg=vmcfg)
 
 
-def update(**kwargs):
+def update(vm, from_file=None, key='uuid', **kwargs):
     '''
     Update a new vm
 
     vm : string
-        Specifies the vm to be updated
-    key : string
-        Specifies if 'vm' is a uuid, alias or hostname.
+        vm to be updated
     from_file : string
-        Specifies the json file to update the vm with.
-        Note: when this is present all other options except 'vm' and 'key' will be ignored.
-    * : string|int|...
-        Specifies options to updte for the vm.
-        Example: image_uuid=UUID, will specify the image_uuid for the vm to be created.
-                 add_nics='[{"nic_tag": "admin", "ip": "198.51.100.123", "netmask": "255.255.255.0"}]', adds 1 nic over the admin tag
-                 remove_nics='[ "12:ae:d3:28:98:b8" ], remove nics with mac 12:ae:d3:28:98:b8
+        json file to update the vm with -- if present, all other options will be ignored
+    key : string [uuid|alias|hostname]
+        value type of 'vm' parameter
+    kwargs : string|int|...
+        options to update for the vm
 
     CLI Example:
 
@@ -856,45 +771,35 @@ def update(**kwargs):
         salt '*' vmadm.update vm=186da9ab-7392-4f55-91a5-b8f1fe770543 max_physical_memory=1024
     '''
     ret = {}
-    vmadm = _check_vmadm()
     # prepare vmcfg
     vmcfg = {}
-    for key, value in kwargs.iteritems():
-        if key.startswith('_'):
-            continue
-        vmcfg[key] = value
+    kwargs = salt.utils.args.clean_kwargs(**kwargs)
+    for k, v in six.iteritems(kwargs):
+        vmcfg[k] = v
 
-    if 'vm' not in vmcfg:
-        ret['Error'] = 'uuid, alias or hostname must be provided'
-        return ret
-    key = 'uuid' if 'key' not in vmcfg else vmcfg['key']
     if key not in ['uuid', 'alias', 'hostname']:
         ret['Error'] = 'Key must be either uuid, alias or hostname'
         return ret
-    uuid = lookup('{0}={1}'.format(key, vmcfg['vm']), one=True)
+    uuid = lookup('{0}={1}'.format(key, vm), one=True)
     if 'Error' in uuid:
         return uuid
-    if 'vm' in vmcfg:
-        del vmcfg['vm']
-    if 'key' in vmcfg:
-        del vmcfg['key']
 
-    if 'from_file' in vmcfg:
-        return _create_update_from_file('update', uuid, path=vmcfg['from_file'])
+    if from_file:
+        return _create_update_from_file('update', uuid, path=from_file)
     else:
         return _create_update_from_cfg('update', uuid, vmcfg=vmcfg)
 
 
-def send(vm=None, target=None, key='uuid'):
+def send(vm, target, key='uuid'):
     '''
     Send a vm to a directory
 
     vm : string
-        Specifies the vm to be started
+        vm to be sent
     target : string
-        Specifies the target. Can be a directory path.
-    key : string
-        Specifies if 'vm' is a uuid, alias or hostname.
+        target directory
+    key : string [uuid|alias|hostname]
+        value type of 'vm' parameter
 
     CLI Example:
 
@@ -904,16 +809,8 @@ def send(vm=None, target=None, key='uuid'):
         salt '*' vmadm.send vm=nacl target=/opt/backups key=alias
     '''
     ret = {}
-    vmadm = _check_vmadm()
-    zfs = _check_zfs()
-    if vm is None:
-        ret['Error'] = 'uuid, alias or hostname must be provided'
-        return ret
     if key not in ['uuid', 'alias', 'hostname']:
         ret['Error'] = 'Key must be either uuid, alias or hostname'
-        return ret
-    if target is None:
-        ret['Error'] = 'Target must be specified'
         return ret
     if not os.path.isdir(target):
         ret['Error'] = 'Target must be a directory or host'
@@ -922,8 +819,7 @@ def send(vm=None, target=None, key='uuid'):
     if 'Error' in vm:
         return vm
     # vmadm send <uuid> [target]
-    cmd = '{vmadm} send {uuid} > {target}'.format(
-        vmadm=vmadm,
+    cmd = 'vmadm send {uuid} > {target}'.format(
         uuid=vm,
         target=os.path.join(target, '{0}.vmdata'.format(vm))
     )
@@ -940,8 +836,7 @@ def send(vm=None, target=None, key='uuid'):
     for dataset in vmobj['datasets']:
         name = dataset.split('/')
         name = name[-1]
-        cmd = '{zfs} send {dataset} > {target}'.format(
-            zfs=zfs,
+        cmd = 'zfs send {dataset} > {target}'.format(
             dataset=dataset,
             target=os.path.join(target, '{0}-{1}.zfsds'.format(vm, name))
         )
@@ -953,14 +848,14 @@ def send(vm=None, target=None, key='uuid'):
     return True
 
 
-def receive(uuid=None, source=None):
+def receive(uuid, source):
     '''
     Receive a vm from a directory
 
     uuid : string
-        Specifies uuid of vm to receive
+        uuid of vm to be received
     source : string
-        Specifies the target. Can be a directory path.
+        source directory
 
     CLI Example:
 
@@ -969,14 +864,6 @@ def receive(uuid=None, source=None):
         salt '*' vmadm.receive 186da9ab-7392-4f55-91a5-b8f1fe770543 /opt/backups
     '''
     ret = {}
-    vmadm = _check_vmadm()
-    zfs = _check_zfs()
-    if uuid is None:
-        ret['Error'] = 'uuid must be provided'
-        return ret
-    if source is None:
-        ret['Error'] = 'Source must be specified'
-        return ret
     if not os.path.isdir(source):
         ret['Error'] = 'Source must be a directory or host'
         return ret
@@ -984,8 +871,7 @@ def receive(uuid=None, source=None):
         ret['Error'] = 'Unknow vm with uuid in {0}'.format(source)
         return ret
     # vmadm receive
-    cmd = '{vmadm} receive < {source}'.format(
-        vmadm=vmadm,
+    cmd = 'vmadm receive < {source}'.format(
         source=os.path.join(source, '{0}.vmdata'.format(uuid))
     )
     res = __salt__['cmd.run_all'](cmd, python_shell=True)
@@ -1001,8 +887,7 @@ def receive(uuid=None, source=None):
     for dataset in vmobj['datasets']:
         name = dataset.split('/')
         name = name[-1]
-        cmd = '{zfs} receive {dataset} < {source}'.format(
-            zfs=zfs,
+        cmd = 'zfs receive {dataset} < {source}'.format(
             dataset=dataset,
             source=os.path.join(source, '{0}-{1}.zfsds'.format(uuid, name))
         )
@@ -1011,10 +896,7 @@ def receive(uuid=None, source=None):
         if retcode != 0:
             ret['Error'] = res['stderr'] if 'stderr' in res else _exit_status(retcode)
             return ret
-    cmd = '{vmadm} install {uuid}'.format(
-        vmadm=vmadm,
-        uuid=uuid
-    )
+    cmd = 'vmadm install {0}'.format(uuid)
     res = __salt__['cmd.run_all'](cmd, python_shell=True)
     retcode = res['retcode']
     if retcode != 0 and not res['stderr'].endswith('datasets'):

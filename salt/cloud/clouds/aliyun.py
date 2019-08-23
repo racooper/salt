@@ -26,9 +26,8 @@ Set up the cloud configuration at ``/etc/salt/cloud.providers`` or
 '''
 
 # Import python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 import time
-import json
 import pprint
 import logging
 import hmac
@@ -42,6 +41,8 @@ from salt.ext.six.moves.urllib.parse import quote as _quote  # pylint: disable=i
 
 # Import salt cloud libs
 import salt.utils.cloud
+import salt.utils.data
+import salt.utils.json
 import salt.config as config
 from salt.exceptions import (
     SaltCloudNotFound,
@@ -49,8 +50,10 @@ from salt.exceptions import (
     SaltCloudExecutionFailure,
     SaltCloudExecutionTimeout
 )
+from salt.utils.stringutils import to_bytes
 
-# Import Third Party Libs
+# Import 3rd-party libs
+from salt.ext import six
 try:
     import requests
     HAS_REQUESTS = True
@@ -61,15 +64,24 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 ALIYUN_LOCATIONS = {
-    #'us-west-2': 'ec2_us_west_oregon',
+    # 'us-west-2': 'ec2_us_west_oregon',
     'cn-hangzhou': 'AliYun HangZhou Region',
     'cn-beijing': 'AliYun BeiJing Region',
     'cn-hongkong': 'AliYun HongKong Region',
-    'cn-qingdao': 'AliYun QingDao Region'
+    'cn-qingdao': 'AliYun QingDao Region',
+    'cn-shanghai': 'AliYun ShangHai Region',
+    'cn-shenzhen': 'AliYun ShenZheng Region',
+    'ap-northeast-1': 'AliYun DongJing Region',
+    'ap-southeast-1': 'AliYun XinJiaPo Region',
+    'ap-southeast-2': 'AliYun XiNi Region',
+    'eu-central-1': 'EU FalaKeFu Region',
+    'me-east-1': 'ME DiBai Region',
+    'us-east-1': 'US FuJiNiYa Region',
+    'us-west-1': 'US GuiGu Region',
 }
 DEFAULT_LOCATION = 'cn-hangzhou'
 
-DEFAULT_ALIYUN_API_VERSION = '2013-01-10'
+DEFAULT_ALIYUN_API_VERSION = '2014-05-26'
 
 __virtualname__ = 'aliyun'
 
@@ -127,7 +139,7 @@ def avail_locations(call=None):
     for region in items['Regions']['Region']:
         ret[region['RegionId']] = {}
         for item in region:
-            ret[region['RegionId']][item] = str(region[item])
+            ret[region['RegionId']][item] = six.text_type(region[item])
 
     return ret
 
@@ -151,14 +163,18 @@ def avail_images(kwargs=None, call=None):
     if 'location' in kwargs:
         location = kwargs['location']
 
-    params = {'Action': 'DescribeImages', 'RegionId': location}
+    params = {
+        'Action': 'DescribeImages',
+        'RegionId': location,
+        'PageSize': '100',
+    }
     items = query(params=params)
 
     ret = {}
     for image in items['Images']['Image']:
         ret[image['ImageId']] = {}
         for item in image:
-            ret[image['ImageId']][item] = str(image[item])
+            ret[image['ImageId']][item] = six.text_type(image[item])
 
     return ret
 
@@ -180,7 +196,7 @@ def avail_sizes(call=None):
     for image in items['InstanceTypes']['InstanceType']:
         ret[image['InstanceTypeId']] = {}
         for item in image:
-            ret[image['InstanceTypeId']][item] = str(image[item])
+            ret[image['InstanceTypeId']][item] = six.text_type(image[item])
 
     return ret
 
@@ -217,7 +233,7 @@ def list_availability_zones(call=None):
     for zone in items['Zones']['Zone']:
         ret[zone['ZoneId']] = {}
         for item in zone:
-            ret[zone['ZoneId']][item] = str(zone[item])
+            ret[zone['ZoneId']][item] = six.text_type(zone[item])
 
     return ret
 
@@ -241,8 +257,9 @@ def list_nodes_min(call=None):
     }
     nodes = query(params)
 
-    log.debug('Total {0} instance found in Region {1}'.format(
-        nodes['TotalCount'], location)
+    log.debug(
+        'Total %s instance found in Region %s',
+        nodes['TotalCount'], location
     )
     if 'Code' in nodes or nodes['TotalCount'] == 0:
         return ret
@@ -274,7 +291,7 @@ def list_nodes(call=None):
             'public_ips': node['public_ips'],
             'private_ips': node['private_ips'],
             'size': node['size'],
-            'state': str(node['state']),
+            'state': six.text_type(node['state']),
         }
     return ret
 
@@ -294,16 +311,25 @@ def list_nodes_full(call=None):
     params = {
         'Action': 'DescribeInstanceStatus',
         'RegionId': location,
+        'PageSize': '50'
     }
     result = query(params=params)
 
-    log.debug('Total {0} instance found in Region {1}'.format(
-        result['TotalCount'], location)
+    log.debug(
+        'Total %s instance found in Region %s',
+        result['TotalCount'], location
     )
     if 'Code' in result or result['TotalCount'] == 0:
         return ret
 
-    for node in result['InstanceStatuses']['InstanceStatus']:
+    # aliyun max 100 top instance in api
+    result_instancestatus = result['InstanceStatuses']['InstanceStatus']
+    if result['TotalCount'] > 50:
+        params['PageNumber'] = '2'
+        result = query(params=params)
+        result_instancestatus.update(result['InstanceStatuses']['InstanceStatus'])
+
+    for node in result_instancestatus:
 
         instanceId = node.get('InstanceId', '')
 
@@ -313,12 +339,13 @@ def list_nodes_full(call=None):
         }
         items = query(params=params)
         if 'Code' in items:
-            log.warn('Query instance:{0} attribute failed'.format(instanceId))
+            log.warning('Query instance:%s attribute failed', instanceId)
             continue
 
-        ret[instanceId] = {
+        name = items['InstanceName']
+        ret[name] = {
             'id': items['InstanceId'],
-            'name': items['InstanceName'],
+            'name': name,
             'image': items['ImageId'],
             'size': 'TODO',
             'state': items['Status']
@@ -326,12 +353,16 @@ def list_nodes_full(call=None):
         for item in items:
             value = items[item]
             if value is not None:
-                value = str(value)
+                value = six.text_type(value)
             if item == "PublicIpAddress":
-                ret[instanceId]['public_ips'] = items[item]['IpAddress']
-            if item == "InnerIpAddress":
-                ret[instanceId]['private_ips'] = items[item]['IpAddress']
-            ret[instanceId][item] = value
+                ret[name]['public_ips'] = items[item]['IpAddress']
+            if item == "InnerIpAddress" and 'private_ips' not in ret[name]:
+                ret[name]['private_ips'] = items[item]['IpAddress']
+            if item == 'VpcAttributes':
+                vpc_ips = items[item]['PrivateIpAddress']['IpAddress']
+                if vpc_ips:
+                    ret[name]['private_ips'] = vpc_ips
+            ret[name][item] = value
 
     provider = __active_provider_name__ or 'aliyun'
     if ':' in provider:
@@ -339,7 +370,7 @@ def list_nodes_full(call=None):
         provider = comps[0]
 
     __opts__['update_cachedir'] = True
-    salt.utils.cloud.cache_node_list(ret, provider, __opts__)
+    __utils__['cloud.cache_node_list'](ret, provider, __opts__)
 
     return ret
 
@@ -365,6 +396,7 @@ def list_securitygroup(call=None):
     params = {
         'Action': 'DescribeSecurityGroups',
         'RegionId': get_location(),
+        'PageSize': '50',
     }
 
     result = query(params)
@@ -385,14 +417,14 @@ def get_image(vm_):
     Return the image object to use
     '''
     images = avail_images()
-    vm_image = str(config.get_cloud_config_value(
+    vm_image = six.text_type(config.get_cloud_config_value(
         'image', vm_, __opts__, search_global=False
     ))
 
     if not vm_image:
         raise SaltCloudNotFound('No image specified for this VM.')
 
-    if vm_image and str(vm_image) in images:
+    if vm_image and six.text_type(vm_image) in images:
         return images[vm_image]['ImageId']
     raise SaltCloudNotFound(
         'The specified image, \'{0}\', could not be found.'.format(vm_image)
@@ -411,7 +443,7 @@ def get_securitygroup(vm_):
     if not securitygroup:
         raise SaltCloudNotFound('No securitygroup ID specified for this VM.')
 
-    if securitygroup and str(securitygroup) in sgs:
+    if securitygroup and six.text_type(securitygroup) in sgs:
         return sgs[securitygroup]['SecurityGroupId']
     raise SaltCloudNotFound(
         'The specified security group, \'{0}\', could not be found.'.format(
@@ -424,14 +456,14 @@ def get_size(vm_):
     Return the VM's size. Used by create_node().
     '''
     sizes = avail_sizes()
-    vm_size = str(config.get_cloud_config_value(
+    vm_size = six.text_type(config.get_cloud_config_value(
         'size', vm_, __opts__, search_global=False
     ))
 
     if not vm_size:
         raise SaltCloudNotFound('No size specified for this VM.')
 
-    if vm_size and str(vm_size) in sizes:
+    if vm_size and six.text_type(vm_size) in sizes:
         return sizes[vm_size]['InstanceTypeId']
 
     raise SaltCloudNotFound(
@@ -444,14 +476,14 @@ def __get_location(vm_):
     Return the VM's location
     '''
     locations = avail_locations()
-    vm_location = str(config.get_cloud_config_value(
+    vm_location = six.text_type(config.get_cloud_config_value(
         'location', vm_, __opts__, search_global=False
     ))
 
     if not vm_location:
         raise SaltCloudNotFound('No location specified for this VM.')
 
-    if vm_location and str(vm_location) in locations:
+    if vm_location and six.text_type(vm_location) in locations:
         return locations[vm_location]['RegionId']
     raise SaltCloudNotFound(
         'The specified location, \'{0}\', could not be found.'.format(
@@ -475,7 +507,7 @@ def start(name, call=None):
             'The stop action must be called with -a or --action.'
         )
 
-    log.info('Starting node {0}'.format(name))
+    log.info('Starting node %s', name)
 
     instanceId = _get_node(name)['InstanceId']
 
@@ -502,14 +534,14 @@ def stop(name, force=False, call=None):
             'The stop action must be called with -a or --action.'
         )
 
-    log.info('Stopping node {0}'.format(name))
+    log.info('Stopping node %s', name)
 
     instanceId = _get_node(name)['InstanceId']
 
     params = {
         'Action': 'StopInstance',
         'InstanceId': instanceId,
-        'ForceStop': str(force).lower()
+        'ForceStop': six.text_type(force).lower()
     }
     result = query(params)
 
@@ -531,7 +563,7 @@ def reboot(name, call=None):
             'The stop action must be called with -a or --action.'
         )
 
-    log.info('Rebooting node {0}'.format(name))
+    log.info('Rebooting node %s', name)
 
     instance_id = _get_node(name)['InstanceId']
 
@@ -556,13 +588,14 @@ def create_node(kwargs):
         'RegionId': kwargs.get('region_id', DEFAULT_LOCATION),
         'ImageId': kwargs.get('image_id', ''),
         'SecurityGroupId': kwargs.get('securitygroup_id', ''),
+        'InstanceName': kwargs.get('name', ''),
     }
 
-    # Optional parameters
+    # Optional parameters'
     optional = [
         'InstanceName', 'InternetChargeType',
         'InternetMaxBandwidthIn', 'InternetMaxBandwidthOut',
-        'HostName', 'Password', 'SystemDisk.Category',
+        'HostName', 'Password', 'SystemDisk.Category', 'VSwitchId'
         # 'DataDisk.n.Size', 'DataDisk.n.Category', 'DataDisk.n.SnapshotId'
     ]
 
@@ -583,29 +616,22 @@ def create(vm_):
         # Check for required profile parameters before sending any API calls.
         if vm_['profile'] and config.is_profile_configured(__opts__,
                                                            __active_provider_name__ or 'aliyun',
-                                                           vm_['profile']) is False:
+                                                           vm_['profile'],
+                                                           vm_=vm_) is False:
             return False
     except AttributeError:
         pass
 
-    # Since using "provider: <provider-engine>" is deprecated, alias provider
-    # to use driver: "driver: <provider-engine>"
-    if 'provider' in vm_:
-        vm_['driver'] = vm_.pop('provider')
-
-    salt.utils.cloud.fire_event(
+    __utils__['cloud.fire_event'](
         'event',
         'starting create',
         'salt/cloud/{0}/creating'.format(vm_['name']),
-        {
-            'name': vm_['name'],
-            'profile': vm_['profile'],
-            'provider': vm_['driver'],
-        },
+        args=__utils__['cloud.filter_event']('creating', vm_, ['name', 'profile', 'provider', 'driver']),
+        sock_dir=__opts__['sock_dir'],
         transport=__opts__['transport']
     )
 
-    log.info('Creating Cloud VM {0}'.format(vm_['name']))
+    log.info('Creating Cloud VM %s', vm_['name'])
     kwargs = {
         'name': vm_['name'],
         'size_id': get_size(vm_),
@@ -613,12 +639,29 @@ def create(vm_):
         'region_id': __get_location(vm_),
         'securitygroup_id': get_securitygroup(vm_),
     }
+    if 'vswitch_id' in vm_:
+        kwargs['VSwitchId'] = vm_['vswitch_id']
+    if 'internet_chargetype' in vm_:
+        kwargs['InternetChargeType'] = vm_['internet_chargetype']
+    if 'internet_maxbandwidthin' in vm_:
+        kwargs['InternetMaxBandwidthIn'] = six.text_type(vm_['internet_maxbandwidthin'])
+    if 'internet_maxbandwidthout' in vm_:
+        kwargs['InternetMaxBandwidthOut'] = six.text_type(vm_['internet_maxbandwidthOut'])
+    if 'hostname' in vm_:
+        kwargs['HostName'] = vm_['hostname']
+    if 'password' in vm_:
+        kwargs['Password'] = vm_['password']
+    if 'instance_name' in vm_:
+        kwargs['InstanceName'] = vm_['instance_name']
+    if 'systemdisk_category' in vm_:
+        kwargs['SystemDisk.Category'] = vm_['systemdisk_category']
 
-    salt.utils.cloud.fire_event(
+    __utils__['cloud.fire_event'](
         'event',
         'requesting instance',
         'salt/cloud/{0}/requesting'.format(vm_['name']),
-        {'kwargs': kwargs},
+        args=__utils__['cloud.filter_event']('requesting', kwargs, list(kwargs)),
+        sock_dir=__opts__['sock_dir'],
         transport=__opts__['transport']
     )
 
@@ -626,16 +669,19 @@ def create(vm_):
         ret = create_node(kwargs)
     except Exception as exc:
         log.error(
-            'Error creating {0} on Aliyun ECS\n\n'
+            'Error creating %s on Aliyun ECS\n\n'
             'The following exception was thrown when trying to '
-            'run the initial deployment: {1}'.format(
-                vm_['name'],
-                str(exc)
-            ),
+            'run the initial deployment: %s',
+            vm_['name'], six.text_type(exc),
             # Show the traceback if the debug logging level is enabled
             exc_info_on_loglevel=logging.DEBUG
         )
         return False
+    # repair ip address error and start vm
+    time.sleep(8)
+    params = {'Action': 'StartInstance',
+              'InstanceId': ret}
+    query(params)
 
     def __query_node_data(vm_name):
         data = show_instance(vm_name, call='action')
@@ -661,32 +707,34 @@ def create(vm_):
         except SaltCloudSystemExit:
             pass
         finally:
-            raise SaltCloudSystemExit(str(exc))
+            raise SaltCloudSystemExit(six.text_type(exc))
 
-    public_ip = data['PublicIpAddress'][0]
-    log.debug('VM {0} is now running'.format(public_ip))
-    vm_['ssh_host'] = public_ip
+    if data['public_ips']:
+        ssh_ip = data['public_ips'][0]
+    elif data['private_ips']:
+        ssh_ip = data['private_ips'][0]
+    else:
+        log.info('No available ip:cant connect to salt')
+        return False
+    log.debug('VM %s is now running', ssh_ip)
+    vm_['ssh_host'] = ssh_ip
 
     # The instance is booted and accessible, let's Salt it!
-    ret = salt.utils.cloud.bootstrap(vm_, __opts__)
-    ret.update(data.__dict__)
+    ret = __utils__['cloud.bootstrap'](vm_, __opts__)
+    ret.update(data)
 
-    log.info('Created Cloud VM \'{0[name]}\''.format(vm_))
+    log.info('Created Cloud VM \'%s\'', vm_['name'])
     log.debug(
-        '\'{0[name]}\' VM creation details:\n{1}'.format(
-            vm_, pprint.pformat(data)
-        )
+        '\'%s\' VM creation details:\n%s',
+        vm_['name'], pprint.pformat(data)
     )
 
-    salt.utils.cloud.fire_event(
+    __utils__['cloud.fire_event'](
         'event',
         'created instance',
         'salt/cloud/{0}/created'.format(vm_['name']),
-        {
-            'name': vm_['name'],
-            'profile': vm_['profile'],
-            'provider': vm_['driver'],
-        },
+        args=__utils__['cloud.filter_event']('created', vm_, ['name', 'profile', 'provider', 'driver']),
+        sock_dir=__opts__['sock_dir'],
         transport=__opts__['transport']
     )
 
@@ -699,7 +747,7 @@ def _compute_signature(parameters, access_key_secret):
     '''
 
     def percent_encode(line):
-        if not isinstance(line, str):
+        if not isinstance(line, six.string_types):
             return line
 
         s = line
@@ -723,7 +771,7 @@ def _compute_signature(parameters, access_key_secret):
     # All aliyun API only support GET method
     stringToSign = 'GET&%2F&' + percent_encode(canonicalizedQueryString[1:])
 
-    h = hmac.new(access_key_secret + "&", stringToSign, sha1)
+    h = hmac.new(to_bytes(access_key_secret + "&"), stringToSign, sha1)
     signature = base64.encodestring(h.digest()).strip()
     return signature
 
@@ -732,7 +780,7 @@ def query(params=None):
     '''
     Make a web call to aliyun ECS REST API
     '''
-    path = 'https://ecs.aliyuncs.com/'
+    path = 'https://ecs-cn-hangzhou.aliyuncs.com'
 
     access_key_id = config.get_cloud_config_value(
         'id', get_configured_provider(), __opts__, search_global=False
@@ -750,7 +798,7 @@ def query(params=None):
         'AccessKeyId': access_key_id,
         'SignatureVersion': '1.0',
         'SignatureMethod': 'HMAC-SHA1',
-        'SignatureNonce': str(uuid.uuid1()),
+        'SignatureNonce': six.text_type(uuid.uuid1()),
         'TimeStamp': timestamp,
     }
 
@@ -776,12 +824,11 @@ def query(params=None):
 
     content = request.text
 
-    result = json.loads(content, object_hook=salt.utils.decode_dict)
+    result = salt.utils.json.loads(content)
     if 'Code' in result:
         raise SaltCloudSystemExit(
             pprint.pformat(result.get('Message', {}))
         )
-
     return result
 
 
@@ -825,7 +872,7 @@ def show_disk(name, call=None):
     for disk in items['Disks']['Disk']:
         ret[disk['DiskId']] = {}
         for item in disk:
-            ret[disk['DiskId']][item] = str(disk[item])
+            ret[disk['DiskId']][item] = six.text_type(disk[item])
 
     return ret
 
@@ -865,7 +912,7 @@ def list_monitor_data(kwargs=None, call=None):
     for data in monitorData['InstanceMonitorData']:
         ret[data['InstanceId']] = {}
         for item in data:
-            ret[data['InstanceId']][item] = str(data[item])
+            ret[data['InstanceId']][item] = six.text_type(data[item])
 
     return ret
 
@@ -890,10 +937,8 @@ def _get_node(name):
         except KeyError:
             attempts -= 1
             log.debug(
-                'Failed to get the data for node \'{0}\'. Remaining '
-                'attempts: {1}'.format(
-                    name, attempts
-                )
+                'Failed to get the data for node \'%s\'. Remaining '
+                'attempts: %s', name, attempts
             )
             # Just a little delay between attempts...
             time.sleep(0.5)
@@ -930,17 +975,18 @@ def show_image(kwargs, call=None):
     # DescribeImages so far support input multi-image. And
     # if not found certain image, the response will include
     # blank image list other than 'not found' error message
-    if 'Code' in items or len(items['Images']['Image']) == 0:
+    if 'Code' in items or not items['Images']['Image']:
         raise SaltCloudNotFound('The specified image could not be found.')
 
-    log.debug('Total {0} image found in Region {1}'.format(
-        items['TotalCount'], location)
+    log.debug(
+        'Total %s image found in Region %s',
+        items['TotalCount'], location
     )
 
     for image in items['Images']['Image']:
         ret[image['ImageId']] = {}
         for item in image:
-            ret[image['ImageId']][item] = str(image[item])
+            ret[image['ImageId']][item] = six.text_type(image[item])
 
     return ret
 
@@ -962,26 +1008,37 @@ def destroy(name, call=None):
             '-a or --action.'
         )
 
-    salt.utils.cloud.fire_event(
+    __utils__['cloud.fire_event'](
         'event',
         'destroying instance',
         'salt/cloud/{0}/destroying'.format(name),
-        {'name': name},
+        args={'name': name},
+        sock_dir=__opts__['sock_dir'],
         transport=__opts__['transport']
     )
 
+    instanceId = _get_node(name)['InstanceId']
+
+    # have to stop instance before del it
+    stop_params = {
+        'Action': 'StopInstance',
+        'InstanceId': instanceId
+    }
+    query(stop_params)
+
     params = {
         'Action': 'DeleteInstance',
-        'InstanceId': name
+        'InstanceId': instanceId
     }
 
     node = query(params)
 
-    salt.utils.cloud.fire_event(
+    __utils__['cloud.fire_event'](
         'event',
         'destroyed instance',
         'salt/cloud/{0}/destroyed'.format(name),
-        {'name': name},
+        args={'name': name},
+        sock_dir=__opts__['sock_dir'],
         transport=__opts__['transport']
     )
 

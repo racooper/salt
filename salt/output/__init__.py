@@ -4,21 +4,25 @@ Used to manage the outputter system. This package is the modular system used
 for managing outputters.
 '''
 
-# Import python libs
-from __future__ import print_function
-from __future__ import absolute_import
-import os
-import sys
+# Import Python libs
+from __future__ import absolute_import, print_function, unicode_literals
+
 import errno
 import logging
+import io
+import os
+import re
+import sys
 import traceback
-from salt.ext.six import string_types
 
-# Import salt libs
+# Import Salt libs
 import salt.loader
-import salt.utils
-from salt.utils import print_cli
-import salt.ext.six as six
+import salt.utils.files
+import salt.utils.platform
+import salt.utils.stringutils
+
+# Import 3rd-party libs
+from salt.ext import six
 
 # Are you really sure !!!
 # dealing with unicode is not as simple as setting defaultencoding
@@ -30,20 +34,26 @@ import salt.ext.six as six
 log = logging.getLogger(__name__)
 
 
-def try_printout(data, out, opts):
+def try_printout(data, out, opts, **kwargs):
     '''
     Safely get the string to print out, try the configured outputter, then
     fall back to nested and then to raw
     '''
     try:
-        return get_printout(out, opts)(data).rstrip()
-    except (KeyError, AttributeError):
+        printout = get_printout(out, opts)(data, **kwargs)
+        if printout is not None:
+            return printout.rstrip()
+    except (KeyError, AttributeError, TypeError):
         log.debug(traceback.format_exc())
         try:
-            return get_printout('nested', opts)(data).rstrip()
-        except (KeyError, AttributeError):
+            printout = get_printout('nested', opts)(data, **kwargs)
+            if printout is not None:
+                return printout.rstrip()
+        except (KeyError, AttributeError, TypeError):
             log.error('Nested output failed: ', exc_info=True)
-            return get_printout('raw', opts)(data).rstrip()
+            printout = get_printout('raw', opts)(data, **kwargs)
+            if printout is not None:
+                return printout.rstrip()
 
 
 def get_progress(opts, out, progress):
@@ -77,20 +87,28 @@ def progress_end(progress_iter):
     return None
 
 
-def display_output(data, out=None, opts=None):
+def display_output(data, out=None, opts=None, **kwargs):
     '''
     Print the passed data using the desired output
     '''
     if opts is None:
         opts = {}
-    display_data = try_printout(data, out, opts)
+    display_data = try_printout(data, out, opts, **kwargs)
 
     output_filename = opts.get('output_file', None)
-    log.trace('data = {0}'.format(data))
+    log.trace('data = %s', data)
     try:
         # output filename can be either '' or None
         if output_filename:
-            with salt.utils.fopen(output_filename, 'a') as ofh:
+            if not hasattr(output_filename, 'write'):
+                ofh = salt.utils.files.fopen(output_filename, 'a')  # pylint: disable=resource-leakage
+                fh_opened = True
+            else:
+                # Filehandle/file-like object
+                ofh = output_filename
+                fh_opened = False
+
+            try:
                 fdata = display_data
                 if isinstance(fdata, six.text_type):
                     try:
@@ -99,15 +117,19 @@ def display_output(data, out=None, opts=None):
                         # try to let the stream write
                         # even if we didn't encode it
                         pass
-                ofh.write(fdata)
-                ofh.write('\n')
+                if fdata:
+                    ofh.write(salt.utils.stringutils.to_str(fdata))
+                    ofh.write('\n')
+            finally:
+                if fh_opened:
+                    ofh.close()
             return
         if display_data:
-            print_cli(display_data)
+            salt.utils.stringutils.print_cli(display_data)
     except IOError as exc:
         # Only raise if it's NOT a broken pipe
         if exc.errno != errno.EPIPE:
-            raise exc
+            six.reraise(*sys.exc_info())
 
 
 def get_printout(out, opts=None, **kwargs):
@@ -117,9 +139,21 @@ def get_printout(out, opts=None, **kwargs):
     if opts is None:
         opts = {}
 
-    if 'output' in opts:
-        # new --out option
+    if 'output' in opts and opts['output'] != 'highstate':
+        # new --out option, but don't choke when using --out=highstate at CLI
+        # See Issue #29796 for more information.
         out = opts['output']
+
+    # Handle setting the output when --static is passed.
+    if not out and opts.get('static'):
+        if opts.get('output'):
+            out = opts['output']
+        elif opts.get('fun', '').split('.')[0] == 'state':
+            # --static doesn't have an output set at this point, but if we're
+            # running a state function and "out" hasn't already been set, we
+            # should set the out variable to "highstate". Otherwise state runs
+            # are set to "nested" below. See Issue #44556 for more information.
+            out = 'highstate'
 
     if out == 'text':
         out = 'txt'
@@ -136,32 +170,59 @@ def get_printout(out, opts=None, **kwargs):
             '''
             try:
                 fileno = sys.stdout.fileno()
-            except AttributeError:
+            except (AttributeError, io.UnsupportedOperation):
                 fileno = -1  # sys.stdout is StringIO or fake
             return not os.isatty(fileno)
 
         if opts.get('force_color', False):
             opts['color'] = True
-        elif opts.get('no_color', False) or is_pipe() or salt.utils.is_windows():
+        elif opts.get('no_color', False) or is_pipe() or salt.utils.platform.is_windows():
             opts['color'] = False
         else:
             opts['color'] = True
+    else:
+        if opts.get('force_color', False):
+            opts['color'] = True
+        elif opts.get('no_color', False) or salt.utils.platform.is_windows():
+            opts['color'] = False
+        else:
+            pass
 
     outputters = salt.loader.outputters(opts)
     if out not in outputters:
         # Since the grains outputter was removed we don't need to fire this
         # error when old minions are asking for it
         if out != 'grains':
-            log.error('Invalid outputter {0} specified, fall back to nested'.format(out))
+            log.error(
+                'Invalid outputter %s specified, fall back to nested',
+                out,
+            )
         return outputters['nested']
     return outputters[out]
 
 
-def out_format(data, out, opts=None):
+def out_format(data, out, opts=None, **kwargs):
     '''
     Return the formatted outputter string for the passed data
     '''
-    return try_printout(data, out, opts)
+    return try_printout(data, out, opts, **kwargs)
+
+
+def string_format(data, out, opts=None, **kwargs):
+    '''
+    Return the formatted outputter string, removing the ANSI escape sequences.
+    '''
+    raw_output = try_printout(data, out, opts, **kwargs)
+    ansi_escape = re.compile(r'\x1b[^m]*m')
+    return ansi_escape.sub('', raw_output)
+
+
+def html_format(data, out, opts=None, **kwargs):
+    '''
+    Return the formatted string as HTML.
+    '''
+    ansi_escaped_string = string_format(data, out, opts, **kwargs)
+    return ansi_escaped_string.replace(' ', '&nbsp;').replace('\n', '<br />')
 
 
 def strip_esc_sequence(txt):
@@ -170,6 +231,9 @@ def strip_esc_sequence(txt):
     from writing their own terminal manipulation commands
     '''
     if isinstance(txt, six.string_types):
-        return txt.replace('\033', '?')
+        try:
+            return txt.replace('\033', '?')
+        except UnicodeDecodeError:
+            return txt.replace(str('\033'), str('?'))  # future lint: disable=blacklisted-function
     else:
         return txt

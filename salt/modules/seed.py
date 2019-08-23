@@ -3,7 +3,7 @@
 Virtual machine image management tools
 '''
 
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals, print_function
 
 # Import python libs
 import os
@@ -13,8 +13,8 @@ import tempfile
 
 # Import salt libs
 import salt.crypt
-import salt.utils
 import salt.utils.cloud
+import salt.utils.files
 import salt.config
 import salt.syspaths
 import uuid
@@ -31,8 +31,8 @@ __func_alias__ = {
 
 def _file_or_content(file_):
     if os.path.exists(file_):
-        with salt.utils.fopen(file_) as fic:
-            return fic.read()
+        with salt.utils.files.fopen(file_) as fic:
+            return salt.utils.stringutils.to_unicode(fic.read())
     return file_
 
 
@@ -57,10 +57,11 @@ def prep_bootstrap(mpt):
     fp_ = os.path.join(fpd_, os.path.basename(bs_))
     # Copy script into tmp
     shutil.copy(bs_, fp_)
-    return fp_
+    tmppath = fpd_.replace(mpt, '')
+    return fp_, tmppath
 
 
-def _mount(path, ftype):
+def _mount(path, ftype, root=None):
     mpt = None
     if ftype == 'block':
         mpt = tempfile.mkdtemp()
@@ -70,7 +71,13 @@ def _mount(path, ftype):
     elif ftype == 'dir':
         return path
     elif ftype == 'file':
-        mpt = __salt__['img.mount_image'](path)
+        if 'guestfs.mount' in __salt__:
+            util = 'guestfs'
+        elif 'qemu_nbd.init' in __salt__:
+            util = 'qemu_nbd'
+        else:
+            return None
+        mpt = __salt__['mount.mount'](path, device=root, util=util)
         if not mpt:
             return None
     return mpt
@@ -81,11 +88,11 @@ def _umount(mpt, ftype):
         __salt__['mount.umount'](mpt)
         os.rmdir(mpt)
     elif ftype == 'file':
-        __salt__['img.umount_image'](mpt)
+        __salt__['mount.umount'](mpt, util='qemu_nbd')
 
 
 def apply_(path, id_=None, config=None, approve_key=True, install=True,
-           prep_install=False):
+           prep_install=False, pub_key=None, priv_key=None, mount_point=None):
     '''
     Seed a location (disk image, directory, or block device) with the
     minion config, approve the minion's key, and/or install salt-minion.
@@ -125,26 +132,39 @@ def apply_(path, id_=None, config=None, approve_key=True, install=True,
         return '{0} does not exist'.format(path)
     ftype = stats['type']
     path = stats['target']
-    mpt = _mount(path, ftype)
+    log.debug('Mounting %s at %s', ftype, path)
+    try:
+        os.makedirs(path)
+    except OSError:
+        # The directory already exists
+        pass
+
+    mpt = _mount(path, ftype, mount_point)
 
     if not mpt:
         return '{0} could not be mounted'.format(path)
 
     tmp = os.path.join(mpt, 'tmp')
+    log.debug('Attempting to create directory %s', tmp)
     try:
         os.makedirs(tmp)
     except OSError:
         if not os.path.isdir(tmp):
             raise
-    cfg_files = mkconfig(config, tmp=tmp, id_=id_, approve_key=approve_key)
+    cfg_files = mkconfig(config, tmp=tmp, id_=id_, approve_key=approve_key,
+                         pub_key=pub_key, priv_key=priv_key)
 
     if _check_install(mpt):
         # salt-minion is already installed, just move the config and keys
         # into place
         log.info('salt-minion pre-installed on image, '
-                 'configuring as {0}'.format(id_))
+                 'configuring as %s', id_)
         minion_config = salt.config.minion_config(cfg_files['config'])
         pki_dir = minion_config['pki_dir']
+        if not os.path.isdir(os.path.join(mpt, pki_dir.lstrip('/'))):
+            __salt__['file.makedirs'](
+                os.path.join(mpt, pki_dir.lstrip('/'), '')
+            )
         os.rename(cfg_files['privkey'], os.path.join(
             mpt, pki_dir.lstrip('/'), 'minion.pem'))
         os.rename(cfg_files['pubkey'], os.path.join(
@@ -152,16 +172,15 @@ def apply_(path, id_=None, config=None, approve_key=True, install=True,
         os.rename(cfg_files['config'], os.path.join(mpt, 'etc/salt/minion'))
         res = True
     elif install:
-        log.info('attempting to install salt-minion to '
-                 '{0}'.format(mpt))
+        log.info('Attempting to install salt-minion to %s', mpt)
         res = _install(mpt)
     elif prep_install:
         log.error('The prep_install option is no longer supported. Please use '
-                  'the bootstrap script installed with Salt, located at {0}.'
-                  .format(salt.syspaths.BOOTSTRAP))
+                  'the bootstrap script installed with Salt, located at %s.',
+                  salt.syspaths.BOOTSTRAP)
         res = False
     else:
-        log.warning('No useful action performed on {0}'.format(mpt))
+        log.warning('No useful action performed on %s', mpt)
         res = False
 
     _umount(mpt, ftype)
@@ -201,7 +220,7 @@ def mkconfig(config=None,
 
     # Write the new minion's config to a tmp file
     tmp_config = os.path.join(tmp, 'minion')
-    with salt.utils.fopen(tmp_config, 'w+') as fp_:
+    with salt.utils.files.fopen(tmp_config, 'w+') as fp_:
         fp_.write(salt.utils.cloud.salt_config_to_yaml(config))
 
     # Generate keys for the minion
@@ -209,17 +228,19 @@ def mkconfig(config=None,
     privkeyfn = os.path.join(tmp, 'minion.pem')
     preseeded = pub_key and priv_key
     if preseeded:
-        with salt.utils.fopen(pubkeyfn, 'w') as fic:
-            fic.write(_file_or_content(pub_key))
-        with salt.utils.fopen(privkeyfn, 'w') as fic:
-            fic.write(_file_or_content(priv_key))
+        log.debug('Writing minion.pub to %s', pubkeyfn)
+        log.debug('Writing minion.pem to %s', privkeyfn)
+        with salt.utils.files.fopen(pubkeyfn, 'w') as fic:
+            fic.write(salt.utils.stringutils.to_str(_file_or_content(pub_key)))
+        with salt.utils.files.fopen(privkeyfn, 'w') as fic:
+            fic.write(salt.utils.stringutils.to_str(_file_or_content(priv_key)))
         os.chmod(pubkeyfn, 0o600)
         os.chmod(privkeyfn, 0o600)
     else:
         salt.crypt.gen_keys(tmp, 'minion', 2048)
     if approve_key and not preseeded:
-        with salt.utils.fopen(pubkeyfn) as fp_:
-            pubkey = fp_.read()
+        with salt.utils.files.fopen(pubkeyfn) as fp_:
+            pubkey = salt.utils.stringutils.to_unicode(fp_.read())
             __salt__['pillar.ext']({'virtkey': [id_, pubkey]})
 
     return {'config': tmp_config, 'pubkey': pubkeyfn, 'privkey': privkeyfn}
@@ -231,13 +252,12 @@ def _install(mpt):
     install it.
     Return True if install is successful or already installed.
     '''
-
     _check_resolv(mpt)
-    boot_ = (prep_bootstrap(mpt)
+    boot_, tmppath = (prep_bootstrap(mpt)
              or salt.syspaths.BOOTSTRAP)
     # Exec the chroot command
     cmd = 'if type salt-minion; then exit 0; '
-    cmd += 'else sh {0} -c /tmp; fi'.format(salt.syspaths.BOOTSTRAP)
+    cmd += 'else sh {0} -c /tmp; fi'.format(os.path.join(tmppath, 'bootstrap-salt.sh'))
     return not __salt__['cmd.run_chroot'](mpt, cmd, python_shell=True)['retcode']
 
 
@@ -254,9 +274,11 @@ def _check_resolv(mpt):
     if not os.path.isfile(resolv):
         replace = True
     if not replace:
-        with salt.utils.fopen(resolv, 'rb') as fp_:
-            conts = fp_.read()
+        with salt.utils.files.fopen(resolv, 'rb') as fp_:
+            conts = salt.utils.stringutils.to_unicode(fp_.read())
             if 'nameserver' not in conts:
+                replace = True
+            if 'nameserver 127.0.0.1' in conts:
                 replace = True
     if replace:
         shutil.copy('/etc/resolv.conf', resolv)
@@ -268,7 +290,7 @@ def _check_install(root):
         sh_ = '/bin/bash'
 
     cmd = ('if ! type salt-minion; then exit 1; fi')
-    cmd = 'chroot \'{0}\' {1} -c {2!r}'.format(
+    cmd = 'chroot \'{0}\' {1} -c \'{2}\''.format(
         root,
         sh_,
         cmd)

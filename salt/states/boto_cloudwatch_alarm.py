@@ -10,7 +10,7 @@ Amazon's services, and so may incur charges.
 This module uses boto, which can be installed via package, or pip.
 
 This module accepts explicit credentials but can also utilize
-IAM roles assigned to the instance trough Instance Profiles. Dynamic
+IAM roles assigned to the instance through Instance Profiles. Dynamic
 credentials are then automatically obtained from AWS API and no further
 configuration is necessary. More Information available at:
 
@@ -54,10 +54,13 @@ as a passed in dict, or as a string to pull from pillars or minion config:
 '''
 
 # Import Python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
+
+# Import Salt libs
+import salt.utils.data
 
 # Import 3rd-party libs
-import salt.ext.six as six
+from salt.ext import six
 
 
 def __virtual__():
@@ -116,14 +119,17 @@ def present(
             if k not in alarm_details:
                 difference.append("{0}={1} (new)".format(k, v))
                 continue
-            v2 = alarm_details[k]
+            v = salt.utils.data.decode(v)
+            v2 = salt.utils.data.decode(alarm_details[k])
             if v == v2:
                 continue
-            if isinstance(v, six.string_types) and str(v) == str(v2):
+            if isinstance(v, six.string_types) and v == v2:
                 continue
             if isinstance(v, float) and v == float(v2):
                 continue
             if isinstance(v, int) and v == int(v2):
+                continue
+            if isinstance(v, list) and sorted(v) == sorted(v2):
                 continue
             difference.append("{0}='{1}' was: '{2}'".format(k, v, v2))
     else:
@@ -138,7 +144,7 @@ def present(
     create_or_update_alarm_args.update(attributes)
     if alarm_details:   # alarm is present.  update, or do nothing
         # check to see if attributes matches is_present. If so, do nothing.
-        if len(difference) == 0:
+        if not difference:
             ret['comment'] = "alarm {0} present and matching".format(name)
             return ret
         if __opts__['test']:

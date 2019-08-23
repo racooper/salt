@@ -5,7 +5,7 @@ Send a message to PushOver
 
 This state is useful for sending messages to PushOver during state runs.
 
-.. versionadded:: Lithium
+.. versionadded:: 2015.5.0
 
 .. code-block:: yaml
 
@@ -27,6 +27,9 @@ The api key can be specified in the master or minion configuration like below:
       token: peWcBiMOS9HrZG15peWcBiMOS9HrZG15
 
 '''
+
+# Import Python libs
+from __future__ import absolute_import, print_function, unicode_literals
 
 
 def __virtual__():

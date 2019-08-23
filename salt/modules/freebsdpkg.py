@@ -2,6 +2,12 @@
 '''
 Remote package support using ``pkg_add(1)``
 
+.. important::
+    If you feel that Salt should be using this module to manage packages on a
+    minion, and it is using a different module (or gives an error similar to
+    *'pkg.install' is not available*), see :ref:`here
+    <module-provider-override>`.
+
 .. warning::
 
     This module has been completely rewritten. Up to and including version
@@ -66,7 +72,7 @@ variables, if set, but these values can also be overridden in several ways:
               pkg.installed:
                 - fromrepo: ftp://ftp2.freebsd.org/
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import python libs
 import copy
@@ -74,9 +80,11 @@ import logging
 import re
 
 # Import salt libs
-import salt.utils
+import salt.utils.data
+import salt.utils.functools
+import salt.utils.pkg
 from salt.exceptions import CommandExecutionError, MinionError
-import salt.ext.six as six
+from salt.ext import six
 
 log = logging.getLogger(__name__)
 
@@ -90,16 +98,16 @@ def __virtual__():
     Don't load on FreeBSD 9 when the config option
     ``providers:pkg`` is set to 'pkgng'.
     '''
-    if __grains__['os'] == 'FreeBSD' and float(__grains__['osrelease']) < 10:
+    if __grains__.get('os') == 'FreeBSD' and float(__grains__['osrelease']) < 10:
         providers = {}
         if 'providers' in __opts__:
             providers = __opts__['providers']
         if providers and 'pkg' in providers and providers['pkg'] == 'pkgng':
             log.debug('Configuration option \'providers:pkg\' is set to '
                     '\'pkgng\', won\'t load old provider \'freebsdpkg\'.')
-            return False
+            return (False, 'The freebsdpkg execution module cannot be loaded: the configuration option \'providers:pkg\' is set to \'pkgng\'')
         return __virtualname__
-    return False
+    return (False, 'The freebsdpkg execution module cannot be loaded: either the os is not FreeBSD or the version of FreeBSD is >= 10.')
 
 
 def _get_repo_options(fromrepo=None, packagesite=None):
@@ -139,7 +147,9 @@ def _match(names):
 
     # Look for full matches
     full_pkg_strings = []
-    out = __salt__['cmd.run_stdout']('pkg_info', output_loglevel='trace')
+    out = __salt__['cmd.run_stdout'](['pkg_info'],
+                                     output_loglevel='trace',
+                                     python_shell=False)
     for line in out.splitlines():
         try:
             full_pkg_strings.append(line.split()[0])
@@ -158,7 +168,7 @@ def _match(names):
             else:
                 ambiguous.append(name)
                 errors.append(
-                    'Ambiguous package {0!r}. Full name/version required. '
+                    'Ambiguous package \'{0}\'. Full name/version required. '
                     'Possible matches: {1}'.format(
                         name,
                         ', '.join(['{0}-{1}'.format(name, x) for x in cver])
@@ -169,7 +179,7 @@ def _match(names):
     not_matched = \
         set(names) - set(matches) - set(full_matches) - set(ambiguous)
     for name in not_matched:
-        errors.append('Package {0!r} not found'.format(name))
+        errors.append('Package \'{0}\' not found'.format(name))
 
     return matches + full_matches, errors
 
@@ -189,8 +199,9 @@ def latest_version(*names, **kwargs):
     '''
     return '' if len(names) == 1 else dict((x, '') for x in names)
 
+
 # available_version is being deprecated
-available_version = latest_version
+available_version = salt.utils.functools.alias_function(latest_version, 'available_version')
 
 
 def version(*names, **kwargs):
@@ -215,7 +226,7 @@ def version(*names, **kwargs):
     '''
     with_origin = kwargs.pop('with_origin', False)
     ret = __salt__['pkg_resource.version'](*names, **kwargs)
-    if not salt.utils.is_true(with_origin):
+    if not salt.utils.data.is_true(with_origin):
         return ret
     # Put the return value back into a dict since we're adding a subdict
     if len(names) == 1:
@@ -227,7 +238,7 @@ def version(*names, **kwargs):
     ])
 
 
-def refresh_db():
+def refresh_db(**kwargs):
     '''
     ``pkg_add(1)`` does not use a local database of available packages, so this
     function simply returns ``True``. it exists merely for API compatibility.
@@ -238,6 +249,8 @@ def refresh_db():
 
         salt '*' pkg.refresh_db
     '''
+    # Remove rtag file to keep multiple refreshes from happening in pkg states
+    salt.utils.pkg.clear_rtag(__opts__)
     return True
 
 
@@ -259,9 +272,9 @@ def list_pkgs(versions_as_list=False, with_origin=False, **kwargs):
 
         salt '*' pkg.list_pkgs
     '''
-    versions_as_list = salt.utils.is_true(versions_as_list)
+    versions_as_list = salt.utils.data.is_true(versions_as_list)
     # not yet implemented or not applicable
-    if any([salt.utils.is_true(kwargs.get(x))
+    if any([salt.utils.data.is_true(kwargs.get(x))
             for x in ('removed', 'purge_desired')]):
         return {}
 
@@ -269,7 +282,7 @@ def list_pkgs(versions_as_list=False, with_origin=False, **kwargs):
         ret = copy.deepcopy(__context__['pkg.list_pkgs'])
         if not versions_as_list:
             __salt__['pkg_resource.stringify'](ret)
-        if salt.utils.is_true(with_origin):
+        if salt.utils.data.is_true(with_origin):
             origins = __context__.get('pkg.origin', {})
             return dict([
                 (x, {'origin': origins.get(x, ''), 'version': y})
@@ -279,7 +292,9 @@ def list_pkgs(versions_as_list=False, with_origin=False, **kwargs):
 
     ret = {}
     origins = {}
-    out = __salt__['cmd.run_stdout']('pkg_info -ao', output_loglevel='trace')
+    out = __salt__['cmd.run_stdout'](['pkg_info', '-ao'],
+                                     output_loglevel='trace',
+                                     python_shell=False)
     pkgs_re = re.compile(r'Information for ([^:]+):\s*Origin:\n([^\n]+)')
     for pkg, origin in pkgs_re.findall(out):
         if not pkg:
@@ -296,7 +311,7 @@ def list_pkgs(versions_as_list=False, with_origin=False, **kwargs):
     __context__['pkg.origin'] = origins
     if not versions_as_list:
         __salt__['pkg_resource.stringify'](ret)
-    if salt.utils.is_true(with_origin):
+    if salt.utils.data.is_true(with_origin):
         return dict([
             (x, {'origin': origins.get(x, ''), 'version': y})
             for x, y in six.iteritems(ret)
@@ -385,29 +400,29 @@ def install(name=None,
     args.extend(pkg_params)
 
     old = list_pkgs()
-    __salt__['cmd.run'](
-        'pkg_add {0}'.format(' '.join(args)),
+    out = __salt__['cmd.run_all'](
+        ['pkg_add'] + args,
         env=env,
-        output_loglevel='trace'
+        output_loglevel='trace',
+        python_shell=False
     )
+    if out['retcode'] != 0 and out['stderr']:
+        errors = [out['stderr']]
+    else:
+        errors = []
+
     __context__.pop('pkg.list_pkgs', None)
     new = list_pkgs()
     _rehash()
-    return salt.utils.compare_dicts(old, new)
+    ret = salt.utils.data.compare_dicts(old, new)
 
+    if errors:
+        raise CommandExecutionError(
+            'Problem encountered installing package(s)',
+            info={'errors': errors, 'changes': ret}
+        )
 
-def upgrade():
-    '''
-    Upgrades are not supported with ``pkg_add(1)``. This function is included
-    for API compatibility only and always returns an empty dict.
-
-    CLI Example:
-
-    .. code-block:: bash
-
-        salt '*' pkg.upgrade
-    '''
-    return {}
+    return ret
 
 
 def remove(name=None, pkgs=None, **kwargs):
@@ -448,16 +463,34 @@ def remove(name=None, pkgs=None, **kwargs):
         log.error(error)
     if not targets:
         return {}
-    cmd = 'pkg_delete {0}'.format(' '.join(targets))
-    __salt__['cmd.run'](cmd, output_loglevel='trace')
+
+    out = __salt__['cmd.run_all'](
+        ['pkg_delete'] + targets,
+        output_loglevel='trace',
+        python_shell=False
+    )
+    if out['retcode'] != 0 and out['stderr']:
+        errors = [out['stderr']]
+    else:
+        errors = []
+
     __context__.pop('pkg.list_pkgs', None)
     new = list_pkgs()
-    return salt.utils.compare_dicts(old, new)
+    ret = salt.utils.data.compare_dicts(old, new)
+
+    if errors:
+        raise CommandExecutionError(
+            'Problem encountered removing package(s)',
+            info={'errors': errors, 'changes': ret}
+        )
+
+    return ret
+
 
 # Support pkg.delete to remove packages to more closely match pkg_delete
-delete = remove
+delete = salt.utils.functools.alias_function(remove, 'delete')
 # No equivalent to purge packages, use remove instead
-purge = remove
+purge = salt.utils.functools.alias_function(remove, 'purge')
 
 
 def _rehash():
@@ -465,12 +498,12 @@ def _rehash():
     Recomputes internal hash table for the PATH variable. Use whenever a new
     command is created during the current session.
     '''
-    shell = __salt__['environ.get']('SHELL', output_loglevel='trace')
+    shell = __salt__['environ.get']('SHELL')
     if shell.split('/')[-1] in ('csh', 'tcsh'):
-        __salt__['cmd.run']('rehash', output_loglevel='trace')
+        __salt__['cmd.shell']('rehash', output_loglevel='trace')
 
 
-def file_list(*packages):
+def file_list(*packages, **kwargs):
     '''
     List the files that belong to a package. Not specifying any packages will
     return a list of _every_ file on the system's package database (not
@@ -492,7 +525,7 @@ def file_list(*packages):
     return ret
 
 
-def file_dict(*packages):
+def file_dict(*packages, **kwargs):
     '''
     List the files that belong to a package, grouped by package. Not
     specifying any packages will return a list of _every_ file on the
@@ -511,13 +544,13 @@ def file_dict(*packages):
 
     if packages:
         match_pattern = '\'{0}-[0-9]*\''
-        matches = [match_pattern.format(p) for p in packages]
-
-        cmd = 'pkg_info -QL {0}'.format(' '.join(matches))
+        cmd = ['pkg_info', '-QL'] + [match_pattern.format(p) for p in packages]
     else:
-        cmd = 'pkg_info -QLa'
+        cmd = ['pkg_info', '-QLa']
 
-    ret = __salt__['cmd.run_all'](cmd, output_loglevel='trace')
+    ret = __salt__['cmd.run_all'](cmd,
+                                  output_loglevel='trace',
+                                  python_shell=False)
 
     for line in ret['stderr'].splitlines():
         errors.append(line)

@@ -5,7 +5,7 @@ Connection module for Amazon DynamoDB
 .. versionadded:: 2015.5.0
 
 :configuration: This module accepts explicit DynamoDB credentials but can also
-    utilize IAM roles assigned to the instance trough Instance Profiles.
+    utilize IAM roles assigned to the instance through Instance Profiles.
     Dynamic credentials are then automatically obtained from AWS API and no
     further configuration is necessary. More Information available at:
 
@@ -30,7 +30,7 @@ Connection module for Amazon DynamoDB
     If a region is not specified, the default is us-east-1.
 
     It's also possible to specify key, keyid and region via a profile, either
-    as a passed in dict, or as a string to pull from pillars or minion config::
+    as a passed in dict, or as a string to pull from pillars or minion config:
 
     .. code-block:: yaml
 
@@ -45,7 +45,7 @@ Connection module for Amazon DynamoDB
 #pylint: disable=E0602
 
 # Import Python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 import logging
 import time
 
@@ -53,16 +53,20 @@ logger = logging.getLogger(__name__)
 logging.getLogger('boto').setLevel(logging.INFO)
 
 # Import third party libs
-import salt.ext.six as six
+from salt.ext import six
 from salt.ext.six.moves import range  # pylint: disable=import-error,redefined-builtin
+from salt.exceptions import SaltInvocationError
+import salt.utils.versions
+
 try:
     #pylint: disable=unused-import
     import boto
     import boto.dynamodb2
     #pylint: enable=unused-import
     from boto.dynamodb2.fields import HashKey, RangeKey
-    from boto.dynamodb2.fields import AllIndex, GlobalAllIndex
+    from boto.dynamodb2.fields import AllIndex, GlobalAllIndex, GlobalIncludeIndex, GlobalKeysOnlyIndex
     from boto.dynamodb2.table import Table
+    from boto.exception import JSONResponseError
     HAS_BOTO = True
 except ImportError:
     HAS_BOTO = False
@@ -72,10 +76,10 @@ def __virtual__():
     '''
     Only load if boto libraries exist.
     '''
-    if not HAS_BOTO:
-        return False
-    __utils__['boto.assign_funcs'](__name__, 'dynamodb2')
-    return True
+    has_boto_reqs = salt.utils.versions.check_boto_reqs(check_boto3=False)
+    if has_boto_reqs is True:
+        __utils__['boto.assign_funcs'](__name__, 'dynamodb2', pack=__salt__)
+    return has_boto_reqs
 
 
 def create_table(table_name, region=None, key=None, keyid=None, profile=None,
@@ -120,17 +124,13 @@ def create_table(table_name, region=None, key=None, keyid=None, profile=None,
     }
     local_table_indexes = []
     if local_indexes:
-        # Add the table's key
-        local_table_indexes.append(
-            AllIndex(primary_index_name, parts=primary_index_fields)
-        )
         for index in local_indexes:
-            local_table_indexes.append(_extract_index(index))
+            local_table_indexes.append(extract_index(index))
     global_table_indexes = []
     if global_indexes:
         for index in global_indexes:
             global_table_indexes.append(
-                _extract_index(index, global_index=True)
+                extract_index(index, global_index=True)
             )
 
     conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
@@ -171,10 +171,15 @@ def exists(table_name, region=None, key=None, keyid=None, profile=None):
 
         salt myminion boto_dynamodb.exists table_name region=us-east-1
     '''
-    conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
+    try:
+        conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
+        conn.describe_table(table_name)
+    except JSONResponseError as e:
+        if e.error_code == 'ResourceNotFoundException':
+            return False
+        raise
 
-    tables = conn.list_tables()
-    return bool(tables and table_name in tables['TableNames'])
+    return True
 
 
 def delete(table_name, region=None, key=None, keyid=None, profile=None):
@@ -203,10 +208,72 @@ def delete(table_name, region=None, key=None, keyid=None, profile=None):
     return False
 
 
-def _extract_index(index_data, global_index=False):
+def update(table_name, throughput=None, global_indexes=None,
+           region=None, key=None, keyid=None, profile=None):
+    '''
+    Update a DynamoDB table.
+
+    CLI example::
+
+        salt myminion boto_dynamodb.update table_name region=us-east-1
+    '''
+    conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
+    table = Table(table_name, connection=conn)
+    return table.update(throughput=throughput, global_indexes=global_indexes)
+
+
+def create_global_secondary_index(table_name, global_index, region=None,
+                                  key=None, keyid=None, profile=None):
+    '''
+    Creates a single global secondary index on a DynamoDB table.
+
+    CLI Example:
+    .. code-block:: bash
+
+        salt myminion boto_dynamodb.create_global_secondary_index table_name /
+        index_name
+    '''
+    conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
+    table = Table(table_name, connection=conn)
+    return table.create_global_secondary_index(global_index)
+
+
+def update_global_secondary_index(table_name, global_indexes, region=None,
+                                  key=None, keyid=None, profile=None):
+    '''
+    Updates the throughput of the given global secondary indexes.
+
+    CLI Example:
+    .. code-block:: bash
+
+        salt myminion boto_dynamodb.update_global_secondary_index table_name /
+        indexes
+    '''
+    conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
+    table = Table(table_name, connection=conn)
+    return table.update_global_secondary_index(global_indexes)
+
+
+def describe(table_name, region=None, key=None, keyid=None, profile=None):
+    '''
+    Describe a DynamoDB table.
+
+    CLI example::
+
+        salt myminion boto_dynamodb.describe table_name region=us-east-1
+    '''
+    conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
+    table = Table(table_name, connection=conn)
+    return table.describe()
+
+
+def extract_index(index_data, global_index=False):
     '''
     Instantiates and returns an AllIndex object given a valid index
     configuration
+
+    CLI Example:
+        salt myminion boto_dynamodb.extract_index index
     '''
     parsed_data = {}
     keys = []
@@ -228,6 +295,10 @@ def _extract_index(index_data, global_index=False):
                     parsed_data['read_capacity_units'] = data
                 elif field == 'write_capacity_units':
                     parsed_data['write_capacity_units'] = data
+                elif field == 'includes':
+                    parsed_data['includes'] = data
+                elif field == 'keys_only':
+                    parsed_data['keys_only'] = True
 
     if parsed_data['hash_key']:
         keys.append(
@@ -236,7 +307,7 @@ def _extract_index(index_data, global_index=False):
                 data_type=parsed_data['hash_key_data_type']
             )
         )
-    if parsed_data['range_key']:
+    if parsed_data.get('range_key'):
         keys.append(
             RangeKey(
                 parsed_data['range_key'],
@@ -251,13 +322,30 @@ def _extract_index(index_data, global_index=False):
             'read':     parsed_data['read_capacity_units'],
             'write':    parsed_data['write_capacity_units']
         }
-    if parsed_data['name'] and len(keys) > 0:
+    if parsed_data['name'] and keys:
         if global_index:
-            return GlobalAllIndex(
-                parsed_data['name'],
-                parts=keys,
-                throughput=parsed_data['throughput']
-            )
+            if parsed_data.get('keys_only') and parsed_data.get('includes'):
+                raise SaltInvocationError('Only one type of GSI projection can be used.')
+
+            if parsed_data.get('includes'):
+                return GlobalIncludeIndex(
+                    parsed_data['name'],
+                    parts=keys,
+                    throughput=parsed_data['throughput'],
+                    includes=parsed_data['includes']
+                )
+            elif parsed_data.get('keys_only'):
+                return GlobalKeysOnlyIndex(
+                    parsed_data['name'],
+                    parts=keys,
+                    throughput=parsed_data['throughput'],
+                )
+            else:
+                return GlobalAllIndex(
+                    parsed_data['name'],
+                    parts=keys,
+                    throughput=parsed_data['throughput']
+                )
         else:
             return AllIndex(
                 parsed_data['name'],

@@ -1,18 +1,17 @@
 # -*- coding: utf-8 -*-
 '''
-uWSGI stats server http://uwsgi-docs.readthedocs.org/en/latest/StatsServer.html
+uWSGI stats server https://uwsgi-docs.readthedocs.io/en/latest/StatsServer.html
 
 :maintainer: Peter Baumgartner <pete@lincolnloop.com>
 :maturity:   new
 :platform:   all
 '''
-from __future__ import absolute_import
-
 # Import Python libs
-import json
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import Salt libs
-import salt.utils
+import salt.utils.json
+import salt.utils.path
 
 
 def __virtual__():
@@ -20,9 +19,9 @@ def __virtual__():
     Only load the module if uwsgi is installed
     '''
     cmd = 'uwsgi'
-    if salt.utils.which(cmd):
+    if salt.utils.path.which(cmd):
         return cmd
-    return False
+    return (False, 'The uwsgi execution module failed to load: the uwsgi binary is not in the path.')
 
 
 def stats(socket):
@@ -43,4 +42,4 @@ def stats(socket):
 
     cmd = ['uwsgi', '--connect-and-read', '{0}'.format(socket)]
     out = __salt__['cmd.run'](cmd, python_shell=False)
-    return json.loads(out)
+    return salt.utils.json.loads(out)

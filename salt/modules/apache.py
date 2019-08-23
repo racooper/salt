@@ -10,13 +10,13 @@ Support for Apache
 '''
 
 # Import python libs
-from __future__ import absolute_import, generators, print_function, with_statement
+from __future__ import absolute_import, generators, print_function, with_statement, unicode_literals
 import re
 import logging
 
 # Import 3rd-party libs
 # pylint: disable=import-error,no-name-in-module
-import salt.ext.six as six
+from salt.ext import six
 from salt.ext.six.moves import cStringIO
 from salt.ext.six.moves.urllib.error import URLError
 from salt.ext.six.moves.urllib.request import (
@@ -29,7 +29,11 @@ from salt.ext.six.moves.urllib.request import (
 # pylint: enable=import-error,no-name-in-module
 
 # Import salt libs
-import salt.utils
+import salt.utils.data
+import salt.utils.files
+import salt.utils.path
+import salt.utils.stringutils
+from salt.exceptions import SaltException
 
 log = logging.getLogger(__name__)
 
@@ -39,9 +43,9 @@ def __virtual__():
     Only load the module if apache is installed
     '''
     cmd = _detect_os()
-    if salt.utils.which(cmd):
+    if salt.utils.path.which(cmd):
         return 'apache'
-    return False
+    return (False, 'The apache execution module cannot be loaded: apache is not installed.')
 
 
 def _detect_os():
@@ -49,9 +53,10 @@ def _detect_os():
     Apache commands and paths differ depending on packaging
     '''
     # TODO: Add pillar support for the apachectl location
-    if __grains__['os_family'] == 'RedHat':
+    os_family = __grains__.get('os_family')
+    if os_family == 'RedHat':
         return 'apachectl'
-    elif __grains__['os_family'] == 'Debian':
+    elif os_family == 'Debian' or os_family == 'Suse':
         return 'apache2ctl'
     else:
         return 'apachectl'
@@ -264,10 +269,10 @@ def useradd(pwfile, user, password, opts=''):
     .. code-block:: text
 
         n  Don't update file; display results on stdout.
-        m  Force MD5 encryption of the password (default).
-        d  Force CRYPT encryption of the password.
-        p  Do not encrypt the password (plaintext).
-        s  Force SHA encryption of the password.
+        m  Force MD5 hashing of the password (default).
+        d  Force CRYPT(3) hashing of the password.
+        p  Do not hash the password (plaintext).
+        s  Force SHA1 hashing of the password.
 
     CLI Examples:
 
@@ -396,30 +401,49 @@ def server_status(profile='default'):
 
 
 def _parse_config(conf, slot=None):
+    '''
+    Recursively goes through config structure and builds final Apache configuration
+
+    :param conf: defined config structure
+    :param slot: name of section container if needed
+    '''
     ret = cStringIO()
-    if isinstance(conf, str):
+    if isinstance(conf, six.string_types):
         if slot:
             print('{0} {1}'.format(slot, conf), file=ret, end='')
         else:
             print('{0}'.format(conf), file=ret, end='')
     elif isinstance(conf, list):
-        for value in conf:
-            print(_parse_config(value, str(slot)), file=ret)
+        is_section = False
+        for item in conf:
+            if 'this' in item:
+                is_section = True
+                slot_this = six.text_type(item['this'])
+        if is_section:
+            print('<{0} {1}>'.format(slot, slot_this), file=ret)
+            for item in conf:
+                for key, val in item.items():
+                    if key != 'this':
+                        print(_parse_config(val, six.text_type(key)), file=ret)
+            print('</{0}>'.format(slot), file=ret)
+        else:
+            for value in conf:
+                print(_parse_config(value, six.text_type(slot)), file=ret)
     elif isinstance(conf, dict):
-        print('<{0} {1}>'.format(
-            slot,
-            _parse_config(conf['this'])),
-            file=ret
-        )
-        del conf['this']
+        try:
+            print('<{0} {1}>'.format(slot, conf['this']), file=ret)
+        except KeyError:
+            raise SaltException('Apache section container "<{0}>" expects attribute. '
+                                'Specify it using key "this".'.format(slot))
         for key, value in six.iteritems(conf):
-            if isinstance(value, str):
-                print('{0} {1}'.format(key, value), file=ret)
-            elif isinstance(value, list):
-                print(_parse_config(value, key), file=ret)
-            elif isinstance(value, dict):
-                print(_parse_config(value, key), file=ret)
-        print('</{0}>'.format(slot), file=ret, end='')
+            if key != 'this':
+                if isinstance(value, six.string_types):
+                    print('{0} {1}'.format(key, value), file=ret)
+                elif isinstance(value, list):
+                    print(_parse_config(value, key), file=ret)
+                elif isinstance(value, dict):
+                    print(_parse_config(value, key), file=ret)
+        print('</{0}>'.format(slot), file=ret)
 
     ret.seek(0)
     return ret.read()
@@ -446,11 +470,15 @@ def config(name, config, edit=True):
         salt '*' apache.config /etc/httpd/conf.d/ports.conf config="[{'Listen': '22'}]"
     '''
 
+    configs = []
     for entry in config:
         key = next(six.iterkeys(entry))
-        configs = _parse_config(entry[key], key)
-        if edit:
-            with salt.utils.fopen(name, 'w') as configfile:
-                configfile.write('# This file is managed by saltstack.\n')
-                configfile.write(configs)
-    return configs
+        configs.append(_parse_config(entry[key], key))
+
+    # Python auto-correct line endings
+    configstext = '\n'.join(salt.utils.data.decode(configs))
+    if edit:
+        with salt.utils.files.fopen(name, 'w') as configfile:
+            configfile.write('# This file is managed by Salt.\n')
+            configfile.write(salt.utils.stringutils.to_str(configstext))
+    return configstext

@@ -32,7 +32,10 @@ systems hardware through IPMI drivers. It uses a python module `pyghmi`.
 '''
 
 # Import Python Libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
+
+# Import Salt libs
+from salt.ext import six
 
 
 IMPORT_ERR = None
@@ -40,7 +43,7 @@ try:
     from pyghmi.ipmi import command
     from pyghmi.ipmi.private import session
 except Exception as ex:
-    IMPORT_ERR = str(ex)
+    IMPORT_ERR = six.text_type(ex)
 
 __virtualname__ = 'ipmi'
 
@@ -64,7 +67,7 @@ def _get_config(**kwargs):
     if '__salt__' in globals():
         config_key = '{0}.config'.format(__virtualname__)
         config.update(__salt__['config.get'](config_key, {}))
-    for k in set(config.keys()) & set(kwargs.keys()):
+    for k in set(config) & set(kwargs):
         config[k] = kwargs[k]
     return config
 
@@ -73,7 +76,6 @@ class _IpmiCommand(object):
     o = None
 
     def __init__(self, **kwargs):
-        #cache_key = api_host + api_user + str(api_port)
         config = _get_config(**kwargs)
         self.o = command.Command(bmc=config['api_host'], userid=config['api_user'],
                                  password=config['api_pass'], port=config['api_port'],
@@ -95,7 +97,6 @@ class _IpmiSession(object):
             raise Exception(response['error'])
 
     def __init__(self, **kwargs):
-        #cache_key = api_host + api_user + str(api_port)
         config = _get_config(**kwargs)
         self.o = session.Session(bmc=config['api_host'],
                                  userid=config['api_user'],
@@ -199,53 +200,64 @@ def set_channel_access(channel=14, access_update_mode='non_volatile',
         - 'non_volatile' = set non-volatile Channel Access
         - 'volatile'     = set volatile (active) setting of Channel Access
 
-    :param alerting: PEF Alerting Enable/Disable
+    :param alerting:
+        PEF Alerting Enable/Disable
+
         - True  = enable PEF Alerting
         - False = disable PEF Alerting on this channel
-                (Alert Immediate command can still be used to generate alerts)
+          (Alert Immediate command can still be used to generate alerts)
 
-    :param per_msg_auth: Per-message Authentication
+    :param per_msg_auth:
+        Per-message Authentication
+
         - True  = enable
         - False = disable Per-message Authentication. [Authentication required to
-                activate any session on this channel, but authentication not
-                used on subsequent packets for the session.]
+          activate any session on this channel, but authentication not
+          used on subsequent packets for the session.]
 
-    :param user_level_auth: User Level Authentication Enable/Disable.
+    :param user_level_auth:
+        User Level Authentication Enable/Disable
+
         - True  = enable User Level Authentication. All User Level commands are
-            to be authenticated per the Authentication Type that was
-            negotiated when the session was activated.
+          to be authenticated per the Authentication Type that was
+          negotiated when the session was activated.
         - False = disable User Level Authentication. Allow User Level commands to
-            be executed without being authenticated.
-            If the option to disable User Level Command authentication is
-            accepted, the BMC will accept packets with Authentication Type
-            set to None if they contain user level commands.
-            For outgoing packets, the BMC returns responses with the same
-            Authentication Type that was used for the request.
+          be executed without being authenticated.
+          If the option to disable User Level Command authentication is
+          accepted, the BMC will accept packets with Authentication Type
+          set to None if they contain user level commands.
+          For outgoing packets, the BMC returns responses with the same
+          Authentication Type that was used for the request.
 
-    :param access_mode: Access Mode for IPMI messaging
-        (PEF Alerting is enabled/disabled separately from IPMI messaging)
-        * disabled = disabled for IPMI messaging
-        * pre_boot = pre-boot only channel only available when system is in a
-                powered down state or in BIOS prior to start of boot.
-        * always   = channel always available regardless of system mode.
-                BIOS typically dedicates the serial connection to the BMC.
-        * shared   = same as always available, but BIOS typically leaves the
-                serial port available for software use.
+    :param access_mode:
+        Access Mode for IPMI messaging (PEF Alerting is enabled/disabled
+        separately from IPMI messaging)
 
-    :param privilege_update_mode: Channel Privilege Level Limit.
-        This value sets the maximum privilege level
-        that can be accepted on the specified channel.
-        * dont_change  = don't set or change channel Privilege Level Limit
-        * non_volatile = non-volatile Privilege Level Limit according
-        * volatile     = volatile setting of Privilege Level Limit
+        - disabled = disabled for IPMI messaging
+        - pre_boot = pre-boot only channel only available when system is
+          in a powered down state or in BIOS prior to start of boot.
+        - always   = channel always available regardless of system mode.
+          BIOS typically dedicates the serial connection to the BMC.
+        - shared   = same as always available, but BIOS typically leaves the
+          serial port available for software use.
 
-    :param privilege_level: Channel Privilege Level Limit
-        * reserved      = unused
-        * callback
-        * user
-        * operator
-        * administrator
-        * proprietary   = used by OEM
+    :param privilege_update_mode:
+        Channel Privilege Level Limit. This value sets the maximum privilege
+        level that can be accepted on the specified channel.
+
+        - dont_change  = don't set or change channel Privilege Level Limit
+        - non_volatile = non-volatile Privilege Level Limit according
+        - volatile     = volatile setting of Privilege Level Limit
+
+    :param privilege_level:
+        Channel Privilege Level Limit
+
+        - reserved      = unused
+        - callback
+        - user
+        - operator
+        - administrator
+        - proprietary   = used by OEM
 
     :param kwargs:
         - api_host=127.0.0.1
@@ -270,9 +282,11 @@ def get_channel_access(channel=14, read_mode='non_volatile', **kwargs):
     :param kwargs:api_host='127.0.0.1' api_user='admin' api_pass='example' api_port=623
 
     :param channel: number [1:7]
+
     :param read_mode:
         - non_volatile  = get non-volatile Channel Access
         - volatile      = get present volatile (active) setting of Channel Access
+
     :param kwargs:
         - api_host=127.0.0.1
         - api_user=admin
@@ -280,7 +294,8 @@ def get_channel_access(channel=14, read_mode='non_volatile', **kwargs):
         - api_port=623
         - api_kg=None
 
-    return
+    Return Data
+
         A Python dict with the following keys/values:
 
         .. code-block:: python
@@ -326,8 +341,8 @@ def get_channel_info(channel=14, **kwargs):
         - api_port=623
         - api_kg=None
 
-    return
-        channel session supports:
+    Return Data
+        channel session supports
 
         .. code-block:: none
 
@@ -357,38 +372,39 @@ def set_user_access(uid, channel=14, callback=True, link_auth=True, ipmi_msg=Tru
 
     :param channel: number [1:7]
 
-    :parm callback: User Restricted to Callback
-    False = User Privilege Limit is determined by the User Privilege Limit
-        parameter, below, for both callback and non-callback connections.
-    True  = User Privilege Limit is determined by the User Privilege Limit
-        parameter for callback connections, but is restricted to Callback
-        level for non-callback connections. Thus, a user can only initiate
-        a Callback when they 'call in' to the BMC, but once the callback
-        connection has been made, the user could potentially establish a
-        session as an Operator.
+    :param callback:
+        User Restricted to Callback
 
-    :param link_auth: User Link authentication
-    enable/disable (used to enable whether this
-    user's name and password information will be used for link
-    authentication, e.g. PPP CHAP) for the given channel. Link
-    authentication itself is a global setting for the channel and is
-    enabled/disabled via the serial/modem configuration parameters.
+        - False = User Privilege Limit is determined by the User Privilege Limit
+          parameter, below, for both callback and non-callback connections.
+        - True  = User Privilege Limit is determined by the User Privilege Limit
+          parameter for callback connections, but is restricted to Callback
+          level for non-callback connections. Thus, a user can only initiate
+          a Callback when they 'call in' to the BMC, but once the callback
+          connection has been made, the user could potentially establish a
+          session as an Operator.
 
-    :param ipmi_msg: User IPMI Messaging:
-    (used to enable/disable whether
-    this user's name and password information will be used for IPMI
-    Messaging. In this case, 'IPMI Messaging' refers to the ability to
-    execute generic IPMI commands that are not associated with a
-    particular payload type. For example, if IPMI Messaging is disabled for
-    a user, but that user is enabled for activating the SOL
-    payload type, then IPMI commands associated with SOL and session
-    management, such as Get SOL Configuration Parameters and Close Session
-    are available, but generic IPMI commands such as Get SEL Time are
-    unavailable.)
+    :param link_auth: User Link authentication enable/disable (used to enable
+        whether this user's name and password information will be used for link
+        authentication, e.g. PPP CHAP) for the given channel. Link
+        authentication itself is a global setting for the channel and is
+        enabled/disabled via the serial/modem configuration parameters.
+
+    :param ipmi_msg: User IPMI Messaging: (used to enable/disable whether
+        this user's name and password information will be used for IPMI
+        Messaging. In this case, 'IPMI Messaging' refers to the ability to
+        execute generic IPMI commands that are not associated with a
+        particular payload type. For example, if IPMI Messaging is disabled for
+        a user, but that user is enabled for activating the SOL
+        payload type, then IPMI commands associated with SOL and session
+        management, such as Get SOL Configuration Parameters and Close Session
+        are available, but generic IPMI commands such as Get SEL Time are
+        unavailable.)
 
     :param privilege_level:
-    User Privilege Limit. (Determines the maximum privilege level that the
-    user is allowed to switch to on the specified channel.)
+        User Privilege Limit. (Determines the maximum privilege level that the
+        user is allowed to switch to on the specified channel.)
+
         - callback
         - user
         - operator
@@ -426,20 +442,20 @@ def get_user_access(uid, channel=14, **kwargs):
         - api_port=623
         - api_kg=None
 
-    return
+    Return Data
 
-        .. code-block:: none
+    .. code-block:: none
 
-            channel_info:
-                - max_user_count = maximum number of user IDs on this channel
-                - enabled_users = count of User ID slots presently in use
-                - users_with_fixed_names = count of user IDs with fixed names
-            access:
-                - callback
-                - link_auth
-                - ipmi_msg
-                - privilege_level: [reserved, callback, user, operator
-                                   administrator, proprietary, no_access]
+        channel_info:
+            - max_user_count = maximum number of user IDs on this channel
+            - enabled_users = count of User ID slots presently in use
+            - users_with_fixed_names = count of user IDs with fixed names
+        access:
+            - callback
+            - link_auth
+            - ipmi_msg
+            - privilege_level: [reserved, callback, user, operator
+                               administrator, proprietary, no_access]
 
     CLI Examples:
 
@@ -697,7 +713,7 @@ def set_bootdev(bootdev='default', persist=False, uefiboot=False, **kwargs):
                     this
 
     :param uefiboot: If true, request UEFI boot explicitly.  Strictly
-                    speaking, the spec sugests that if not set, the system
+                    speaking, the spec suggests that if not set, the system
                     should BIOS boot and offers no "don't care" option.
                     In practice, this flag not being set does not preclude
                     UEFI boot on any system I've encountered.
@@ -784,19 +800,19 @@ def get_user(uid, channel=14, **kwargs):
         - api_port=623
         - api_kg=None
 
-    return
+    Return Data
 
-        .. code-block:: none
+    .. code-block:: none
 
-            name: (str)
-            uid: (int)
-            channel: (int)
-            access:
-                - callback (bool)
-                - link_auth (bool)
-                - ipmi_msg (bool)
-                - privilege_level: (str)[callback, user, operatorm administrator,
-                                        proprietary, no_access]
+        name: (str)
+        uid: (int)
+        channel: (int)
+        access:
+            - callback (bool)
+            - link_auth (bool)
+            - ipmi_msg (bool)
+            - privilege_level: (str)[callback, user, operatorm administrator,
+                                    proprietary, no_access]
 
     CLI Examples:
 

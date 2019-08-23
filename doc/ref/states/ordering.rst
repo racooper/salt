@@ -5,10 +5,10 @@ Ordering States
 ===============
 
 The way in which configuration management systems are executed is a hotly
-debated topic in the configuration management world. Two
-major philosophies exist on the subject, to either execute in an imperative
-fashion where things are executed in the order in which they are defined, or
-in a declarative fashion where dependencies need to be mapped between objects.
+debated topic in the configuration management world. Two major philosophies
+exist on the subject, to either execute in an imperative fashion where things
+are executed in the order in which they are defined, or in a declarative
+fashion where dependencies need to be mapped between objects.
 
 Imperative ordering is finite and generally considered easier to write, but
 declarative ordering is much more powerful and flexible but generally considered
@@ -27,18 +27,17 @@ State Auto Ordering
 .. versionadded: 0.17.0
 
 Salt always executes states in a finite manner, meaning that they will always
-execute in the same order regardless of the system that is executing them.
-But in Salt 0.17.0, the ``state_auto_order`` option was added. This option
-makes states get evaluated in the order in which they are defined in sls
-files.
+execute in the same order regardless of the system that is executing them. This
+evaluation order makes it easy to know what order the states will be executed in,
+but it is important to note that the requisite system will override the ordering
+defined in the files, and the ``order`` option, described below, will also
+override the order in which states are executed.
 
-The evaluation order makes it easy to know what order the states will be
-executed in, but it is important to note that the requisite system will
-override the ordering defined in the files, and the ``order`` option described
-below will also override the order in which states are defined in sls files.
+This ordering system can be disabled in preference of lexicographic (classic)
+ordering by setting the ``state_auto_order`` option to ``False`` in the master
+configuration file. Otherwise, ``state_auto_order`` defaults to ``True``.
 
-If the classic ordering is preferred (lexicographic), then set
-``state_auto_order`` to ``False`` in the master configuration file.
+How compiler ordering is managed is described further in :ref:`compiler-ordering`.
 
 .. _ordering_requisites:
 
@@ -47,8 +46,8 @@ Requisite Statements
 
 .. note::
 
-    This document represents behavior exhibited by Salt requisites as of
-    version 0.9.7 of Salt.
+    The behavior of requisites changed in version 0.9.7 of Salt.  This
+    documentation applies to requisites in version 0.9.7 and later.
 
 Often when setting up states any single action will require or depend on
 another action. Salt allows for the building of relationships between states

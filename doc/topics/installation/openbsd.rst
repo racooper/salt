@@ -10,14 +10,17 @@ dependencies of the ``sysutils/salt`` port:
 
 .. code-block:: text
 
-   /net/py-msgpack
-   /net/py-zmq
-   /security/py-M2Crypto
-   /security/py-crypto
-   /textproc/py-MarkupSafe
-   /textproc/py-yaml
-   /www/py-jinja2
-   /www/py-requests
+   devel/py-futures
+   devel/py-progressbar
+   net/py-msgpack
+   net/py-zmq
+   security/py-crypto
+   security/py-M2Crypto
+   textproc/py-MarkupSafe
+   textproc/py-yaml
+   www/py-jinja2
+   www/py-requests
+   www/py-tornado
 
 Installation
 ============
@@ -59,4 +62,4 @@ To start the Minion:
 
     rcctl start salt_minion
 
-Now go to the :doc:`Configuring Salt</ref/configuration/index>` page.
+Now go to the :ref:`Configuring Salt<configuring-salt>` page.

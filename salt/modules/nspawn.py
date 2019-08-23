@@ -22,7 +22,7 @@ Minions running systemd >= 219 will place new containers in
 '''
 
 # Import python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 import errno
 import functools
 import logging
@@ -34,9 +34,12 @@ import tempfile
 
 # Import Salt libs
 import salt.defaults.exitcodes
-import salt.utils
+import salt.utils.args
+import salt.utils.functools
+import salt.utils.path
 import salt.utils.systemd
 from salt.exceptions import CommandExecutionError, SaltInvocationError
+from salt.ext import six
 from salt.ext.six.moves import range  # pylint: disable=redefined-builtin
 
 log = logging.getLogger(__name__)
@@ -54,13 +57,14 @@ def __virtual__():
     '''
     Only work on systems that have been booted with systemd
     '''
-    if __grains__['kernel'] == 'Linux' \
+    if __grains__.get('kernel') == 'Linux' \
             and salt.utils.systemd.booted(__context__):
         if salt.utils.systemd.version() is None:
             log.error('nspawn: Unable to determine systemd version')
         else:
             return __virtualname__
-    return False
+    return (False, 'The nspawn execution module failed to load: '
+            'only work on systems that have been booted with systemd.')
 
 
 def _sd_version():
@@ -82,7 +86,7 @@ def _ensure_exists(wrapped):
             raise CommandExecutionError(
                 'Container \'{0}\' does not exist'.format(name)
             )
-        return wrapped(name, *args, **salt.utils.clean_kwargs(**kwargs))
+        return wrapped(name, *args, **salt.utils.args.clean_kwargs(**kwargs))
     return check_exists
 
 
@@ -144,7 +148,7 @@ def _bootstrap_arch(name, **kwargs):
     '''
     Bootstrap an Arch Linux container
     '''
-    if not salt.utils.which('pacstrap'):
+    if not salt.utils.path.which('pacstrap'):
         raise CommandExecutionError(
             'pacstrap not found, is the arch-install-scripts package '
             'installed?'
@@ -159,10 +163,24 @@ def _bootstrap_arch(name, **kwargs):
 
 def _bootstrap_debian(name, **kwargs):
     '''
-    Bootstrap a Debian Linux container (only unstable is currently supported)
+    Bootstrap a Debian Linux container
     '''
+    version = kwargs.get('version', False)
+    if not version:
+        if __grains__['os'].lower() == 'debian':
+            version = __grains__['osrelease']
+        else:
+            version = 'stable'
+
+    release_blacklist = ['hamm', 'slink', 'potato', 'woody', 'sarge', 'etch', 'lenny', 'squeeze', 'wheezy']
+    if version in release_blacklist:
+        raise CommandExecutionError(
+            'Unsupported Debian version "{0}". '
+            'Only "stable" or "jessie" and newer are supported'.format(version)
+        )
+
     dst = _make_container_root(name)
-    cmd = 'debootstrap --arch=amd64 unstable {0}'.format(dst)
+    cmd = 'debootstrap --arch=amd64 {0} {1}'.format(version, dst)
     ret = __salt__['cmd.run_all'](cmd, python_shell=False)
     if ret['retcode'] != 0:
         _build_failed(dst, name)
@@ -190,12 +208,30 @@ def _bootstrap_fedora(name, **kwargs):
     return ret
 
 
+def _bootstrap_ubuntu(name, **kwargs):
+    '''
+    Bootstrap a Ubuntu Linux container
+    '''
+    version = kwargs.get('version', False)
+    if not version:
+        if __grains__['os'].lower() == 'ubuntu':
+            version = __grains__['oscodename']
+        else:
+            version = 'xenial'
+    dst = _make_container_root(name)
+    cmd = 'debootstrap --arch=amd64 {0} {1}'.format(version, dst)
+    ret = __salt__['cmd.run_all'](cmd, python_shell=False)
+    if ret['retcode'] != 0:
+        _build_failed(dst, name)
+    return ret
+
+
 def _clear_context():
     '''
     Clear any lxc variables set in __context__
     '''
     for var in [x for x in __context__ if x.startswith('nspawn.')]:
-        log.trace('Clearing __context__[\'{0}\']'.format(var))
+        log.trace('Clearing __context__[\'%s\']', var)
         __context__.pop(var, None)
 
 
@@ -221,7 +257,7 @@ def _ensure_systemd(version):
 
     try:
         installed = _sd_version()
-        log.debug('nspawn: detected systemd {0}'.format(installed))
+        log.debug('nspawn: detected systemd %s', installed)
     except (IndexError, ValueError):
         raise CommandExecutionError('nspawn: Unable to get systemd version')
 
@@ -291,17 +327,6 @@ def _run(name,
         return ret
     else:
         return ret[output]
-
-
-def _invalid_kwargs(*args, **kwargs):
-    '''
-    Raise an exception on bad kwarg input
-    '''
-    raise SaltInvocationError(
-        'The following invalid keyword arguments were passed: {0}'
-        .format(', '.join(['{0}={1}'.format(x, kwargs[x])
-                            for x in args]))
-    )
 
 
 @_ensure_exists
@@ -659,11 +684,11 @@ def bootstrap_container(name, dist=None, version=None):
     '''
     if not dist:
         dist = __grains__['os'].lower()
-        log.debug(
-            'nspawn.bootstrap: no dist provided, defaulting to \'{0}\''
-            .format(dist)
-        )
-    return globals()['_bootstrap_{0}'.format(dist)](name, version=version)
+        log.debug('nspawn.bootstrap: no dist provided, defaulting to \'%s\'', dist)
+    try:
+        return globals()['_bootstrap_{0}'.format(dist)](name, version=version)
+    except KeyError:
+        raise CommandExecutionError('Unsupported distribution "{0}"'.format(dist))
 
 
 def _needs_install(name):
@@ -748,7 +773,7 @@ def bootstrap_salt(name,
             pub_key=pub_key, priv_key=priv_key)
         if needs_install or force_install or unconditional_install:
             if install:
-                rstr = __salt__['test.rand_str']()
+                rstr = __salt__['test.random_hash']()
                 configdir = '/tmp/.c_{0}'.format(rstr)
                 run(name,
                     'install -m 0700 -d {0}'.format(configdir),
@@ -761,9 +786,7 @@ def bootstrap_salt(name,
                     'chmod 700 {0}'.format(dest_dir),
                 ]:
                     if run_stdout(name, cmd):
-                        log.error(
-                            ('tmpdir {0} creation'
-                             ' failed ({1}').format(dest_dir, cmd))
+                        log.error('tmpdir %s creation failed (%s)', dest_dir, cmd)
                         return False
                 copy_to(name,
                    bs_,
@@ -782,8 +805,7 @@ def bootstrap_salt(name,
                                dest_dir))
                 # log ASAP the forged bootstrap command which can be wrapped
                 # out of the output in case of unexpected problem
-                log.info('Running {0} in LXC container \'{1}\''
-                         .format(cmd, name))
+                log.info('Running %s in LXC container \'%s\'', cmd, name)
                 ret = retcode(name, cmd, output_loglevel='info',
                                   use_vt=True) == 0
             else:
@@ -860,9 +882,10 @@ def list_running():
             pass
     return sorted(ret)
 
+
 # 'machinectl list' shows only running containers, so allow this to work as an
 # alias to nspawn.list_running
-list_ = list_running
+list_ = salt.utils.functools.alias_function(list_running, 'list_')
 
 
 def list_stopped():
@@ -935,11 +958,10 @@ def info(name, **kwargs):
         salt myminion nspawn.info arch1
         salt myminion nspawn.info arch1 force_start=False
     '''
-    # Use kwargs to
+    kwargs = salt.utils.args.clean_kwargs(**kwargs)
     start_ = kwargs.pop('start', False)
-    bad_kwargs = [x for x in kwargs if not x.startswith('__')]
-    if bad_kwargs:
-        _invalid_kwargs(*bad_kwargs, **kwargs)
+    if kwargs:
+        salt.utils.args.invalid_kwargs(kwargs)
 
     if not start_:
         _ensure_running(name)
@@ -1236,7 +1258,7 @@ def remove(name, stop=False):
 
 
 # Compatibility between LXC and nspawn
-destroy = remove
+destroy = salt.utils.functools.alias_function(remove, 'destroy')
 
 
 @_ensure_exists
@@ -1292,7 +1314,8 @@ def copy_to(name, source, dest, overwrite=False, makedirs=False):
         overwrite=overwrite,
         makedirs=makedirs)
 
-cp = copy_to
+
+cp = salt.utils.functools.alias_function(copy_to, 'cp')
 
 
 # Everything below requres systemd >= 219
@@ -1310,18 +1333,20 @@ def _pull_image(pull_type, image, name, **kwargs):
     if pull_type in ('raw', 'tar'):
         valid_kwargs = ('verify',)
     elif pull_type == 'dkr':
-        valid_kwargs = 'index'
+        valid_kwargs = ('index',)
     else:
         raise SaltInvocationError(
             'Unsupported image type \'{0}\''.format(pull_type)
         )
 
-    bad_kwargs = [x for x in kwargs
-                  if not x.startswith('__')
-                  or x not in valid_kwargs]
+    kwargs = salt.utils.args.clean_kwargs(**kwargs)
+    bad_kwargs = dict(
+        [(x, y) for x, y in six.iteritems(salt.utils.args.clean_kwargs(**kwargs))
+         if x not in valid_kwargs]
+    )
 
     if bad_kwargs:
-        _invalid_kwargs(*bad_kwargs, **kwargs)
+        salt.utils.args.invalid_kwargs(bad_kwargs)
 
     pull_opts = []
 
@@ -1455,4 +1480,5 @@ def pull_dkr(url, name, index):
     '''
     return _pull_image('dkr', url, name, index=index)
 
-pull_docker = pull_dkr
+
+pull_docker = salt.utils.functools.alias_function(pull_dkr, 'pull_docker')

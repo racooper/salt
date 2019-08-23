@@ -1,45 +1,40 @@
+.. _table-of-contents:
+
 ======================
 Salt Table of Contents
 ======================
 
 .. toctree::
     :maxdepth: 2
-    :glob:
 
     topics/index
+    topics/community/index
     topics/installation/index
-    topics/tutorials/index
-    topics/targeting/index
-    topics/pillar/index
-    topics/reactor/index
-    topics/mine/index
-    topics/eauth/index
-    topics/eauth/access_control
-    topics/jobs/index
-    topics/jobs/job_cache
-    topics/jobs/external_cache
-    topics/sdb/index
+    topics/configuration/index
+    topics/using_salt
+    topics/execution/index
+    topics/states/index
+    topics/return_codes/index
+    topics/utils/index
     topics/event/index
-    topics/beacons/index
-    topics/ext_processes/index
-    topics/highavailability/index
-    topics/topology/index
-    topics/proxyminion/index
-    topics/spm/index
-    topics/transports/index
-    topics/windows/index
+    topics/orchestrate/index
+    topics/solaris/index
+    topics/ssh/index
+    topics/thorium/index
     topics/cloud/index
-    topics/netapi/index
+    topics/proxyminion/index
+    topics/network_automation/index
     topics/virt/index
-    topics/yaml/index
-    topics/master_tops/index
-    topics/ssh/*
+    ref/cli/index
+    ref/pillar/index
+    ref/tops/index
     ref/index
-    topics/best_practices
-    topics/troubleshooting/index
+    topics/api
+    topics/topology/index
+    topics/cache/index
+    topics/slots/index
+    topics/windows/index
     topics/development/index
     topics/releases/index
-    topics/projects/index
-    security/index
-    faq
+    topics/venafi/index
     glossary

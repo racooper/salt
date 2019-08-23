@@ -2,20 +2,25 @@
 '''
 Modules used to control the master itself
 '''
-from __future__ import absolute_import
-#import python libs
-import os
+
+# Import Python libs
+from __future__ import absolute_import, print_function, unicode_literals
 import collections
 
 # Import salt libs
-from salt import syspaths
+import salt.client.mixins
 import salt.config
 import salt.loader
-from salt.client import mixins
-from salt.utils.error import raise_error
+import salt.utils.error
+import salt.utils.zeromq
+import salt.transport.client
+
+# Import 3rd-party libs
+from salt.ext import six
 
 
-class WheelClient(mixins.SyncClientMixin, mixins.AsyncClientMixin, object):
+class WheelClient(salt.client.mixins.SyncClientMixin,
+                  salt.client.mixins.AsyncClientMixin, object):
     '''
     An interface to Salt's wheel modules
 
@@ -41,35 +46,45 @@ class WheelClient(mixins.SyncClientMixin, mixins.AsyncClientMixin, object):
 
     def __init__(self, opts=None):
         self.opts = opts
-        self.functions = salt.loader.wheels(opts)
+        self.context = {}
+        self.functions = salt.loader.wheels(opts, context=self.context)
 
     # TODO: remove/deprecate
     def call_func(self, fun, **kwargs):
         '''
         Backwards compatibility
         '''
-        return self.low(fun, kwargs)
+        return self.low(fun, kwargs, print_event=kwargs.get('print_event', True), full_return=kwargs.get('full_return', False))
 
     # TODO: Inconsistent with runner client-- the runner client's master_call gives
-    # an async return, unlike this
+    # an asynchronous return, unlike this
     def master_call(self, **kwargs):
         '''
         Execute a wheel function through the master network interface (eauth).
         '''
         load = kwargs
         load['cmd'] = 'wheel'
-        master_uri = 'tcp://' + salt.utils.ip_bracket(self.opts['interface']) + \
-                                                      ':' + str(self.opts['ret_port'])
-        channel = salt.transport.Channel.factory(self.opts,
-                                                 crypt='clear',
-                                                 master_uri=master_uri)
-        ret = channel.send(load)
+        interface = self.opts['interface']
+        if interface == '0.0.0.0':
+            interface = '127.0.0.1'
+        master_uri = 'tcp://{}:{}'.format(
+            salt.utils.zeromq.ip_bracket(interface),
+            six.text_type(self.opts['ret_port'])
+        )
+        channel = salt.transport.client.ReqChannel.factory(self.opts,
+                                                           crypt='clear',
+                                                           master_uri=master_uri,
+                                                           usage='master_call')
+        try:
+            ret = channel.send(load)
+        finally:
+            channel.close()
         if isinstance(ret, collections.Mapping):
             if 'error' in ret:
-                raise_error(**ret['error'])
+                salt.utils.error.raise_error(**ret['error'])
         return ret
 
-    def cmd_sync(self, low, timeout=None):
+    def cmd_sync(self, low, timeout=None, full_return=False):
         '''
         Execute a wheel function synchronously; eauth is respected
 
@@ -110,9 +125,9 @@ class WheelClient(mixins.SyncClientMixin, mixins.AsyncClientMixin, object):
             {'jid': '20131219224744416681', 'tag': 'salt/wheel/20131219224744416681'}
         '''
         fun = low.pop('fun')
-        return self.async(fun, low)
+        return self.asynchronous(fun, low)
 
-    def cmd(self, fun, arg=None, pub_data=None, kwarg=None):
+    def cmd(self, fun, arg=None, pub_data=None, kwarg=None, print_event=True, full_return=False):
         '''
         Execute a function
 
@@ -121,6 +136,12 @@ class WheelClient(mixins.SyncClientMixin, mixins.AsyncClientMixin, object):
             >>> wheel.cmd('key.finger', ['jerry'])
             {'minions': {'jerry': '5d:f6:79:43:5e:d4:42:3f:57:b8:45:a8:7e:a4:6e:ca'}}
         '''
-        return self.low(fun, kwarg)
+        return super(WheelClient, self).cmd(fun,
+                                            arg,
+                                            pub_data,
+                                            kwarg,
+                                            print_event,
+                                            full_return)
+
 
 Wheel = WheelClient  # for backward-compat

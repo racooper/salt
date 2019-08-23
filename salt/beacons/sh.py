@@ -4,17 +4,18 @@ Watch the shell commands being executed actively. This beacon requires strace.
 '''
 
 # Import python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals
+
+import logging
 import time
 
 # Import salt libs
-import salt.utils
+import salt.utils.path
+import salt.utils.stringutils
 import salt.utils.vt
-from salt.ext.six.moves import range  # pylint: disable=import-error,redefined-builtin
 
 __virtualname__ = 'sh'
 
-import logging
 log = logging.getLogger(__name__)
 
 
@@ -22,7 +23,7 @@ def __virtual__():
     '''
     Only load if strace is installed
     '''
-    return __virtualname__ if salt.utils.which('strace') else False
+    return __virtualname__ if salt.utils.path.which('strace') else False
 
 
 def _get_shells():
@@ -46,10 +47,9 @@ def validate(config):
     Validate the beacon configuration
     '''
     # Configuration for sh beacon should be a list of dicts
-    if not isinstance(config, dict):
-        log.info('Configuration for sh beacon must be a dictionary.')
-        return False
-    return True
+    if not isinstance(config, list):
+        return False, ('Configuration for sh beacon must be a list.')
+    return True, 'Valid beacon configuration'
 
 
 def beacon(config):
@@ -59,7 +59,7 @@ def beacon(config):
     .. code-block:: yaml
 
         beacons:
-          sh: {}
+          sh: []
     '''
     ret = []
     pkey = 'sh.vt'
@@ -67,7 +67,7 @@ def beacon(config):
     ps_out = __salt__['status.procs']()
     track_pids = []
     for pid in ps_out:
-        if ps_out[pid].get('cmd', '') in shells:
+        if any(ps_out[pid].get('cmd', '').lstrip('-') in shell for shell in shells):
             track_pids.append(pid)
     if pkey not in __context__:
         __context__[pkey] = {}
@@ -82,26 +82,26 @@ def beacon(config):
                     stream_stdout=False,
                     stream_stderr=False)
             __context__[pkey][pid]['user'] = ps_out[pid].get('user')
-    for pid in __context__[pkey]:
+    for pid in list(__context__[pkey]):
         out = ''
         err = ''
         while __context__[pkey][pid]['vt'].has_unread_data:
             tout, terr = __context__[pkey][pid]['vt'].recv()
             if not terr:
                 break
-            out += tout
+            out += salt.utils.stringutils.to_unicode(tout or '')
             err += terr
         for line in err.split('\n'):
             event = {'args': [],
                      'tag': pid}
             if 'execve' in line:
                 comps = line.split('execve')[1].split('"')
-                for ind in range(len(comps)):
+                for ind, field in enumerate(comps):
                     if ind == 1:
-                        event['cmd'] = comps[ind]
+                        event['cmd'] = field
                         continue
                     if ind % 2 != 0:
-                        event['args'].append(comps[ind])
+                        event['args'].append(field)
                 event['user'] = __context__[pkey][pid]['user']
                 ret.append(event)
         if not __context__[pkey][pid]['vt'].isalive():

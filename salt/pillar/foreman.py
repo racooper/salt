@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+# -*- strcoding: utf-8 -*-
 '''
 A module to pull data from Foreman via its API into the Pillar dictionary
 
@@ -38,11 +38,12 @@ Further information can be found on `GitHub <https://github.com/theforeman/forem
 Module Documentation
 ====================
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import python libs
 import logging
 
+from salt.ext import six
 try:
     import requests
     HAS_REQUESTS = True
@@ -64,6 +65,9 @@ __opts__ = {'foreman.url': 'http://foreman/api',
 # Set up logging
 log = logging.getLogger(__name__)
 
+# Declare virtualname
+__virtualname__ = 'foreman'
+
 
 def __virtual__():
     '''
@@ -71,6 +75,7 @@ def __virtual__():
     '''
     if not HAS_REQUESTS:
         return False
+    return __virtualname__
 
 
 def ext_pillar(minion_id,
@@ -98,7 +103,7 @@ def ext_pillar(minion_id,
                     'version 2 in your Salt master config')
             raise Exception
 
-        headers = {'accept': 'version=' + str(api) + ',application/json'}
+        headers = {'accept': 'version=' + six.text_type(api) + ',application/json'}
 
         if verify and cafile is not None:
             verify = cafile
@@ -110,27 +115,16 @@ def ext_pillar(minion_id,
                 verify=verify,
                 cert=(certfile, keyfile)
                 )
-        result = resp.json
+        result = resp.json()
 
-        log.debug('Raw response of the Foreman request is %r', format(result))
+        log.debug('Raw response of the Foreman request is %r', result)
 
         if lookup_parameters:
             parameters = dict()
-            for param in result['parameters']:
-                resp = requests.get(
-                        url + '/hosts/' + minion_id + '/parameters/'
-                            + str(param[u'id']),
-                        auth=(user, password),
-                        headers=headers,
-                        verify=verify,
-                        cert=(certfile, keyfile)
-                        )
-                body = resp.json
-                log.debug('Raw response of the Foreman parameter lookup'
-                        'request is %r', format(body))
-                parameters.update({body[u'name']: body[u'value']})
+            for param in result['all_parameters']:
+                parameters.update({param['name']: param['value']})
 
-            result[u'parameters'] = parameters
+            result['parameters'] = parameters
 
         if only:
             result = dict((k, result[k]) for k in only if k in result)

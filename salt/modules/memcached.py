@@ -4,7 +4,7 @@ Module for Management of Memcached Keys
 
 .. versionadded:: 2014.1.0
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 # TODO: use salt.utils.memcache
 
@@ -12,8 +12,9 @@ from __future__ import absolute_import
 import logging
 
 # Import salt libs
+import salt.utils.functools
 from salt.exceptions import CommandExecutionError, SaltInvocationError
-from salt.ext.six import integer_types
+from salt.ext import six
 
 # Import third party libs
 try:
@@ -41,7 +42,10 @@ def __virtual__():
     '''
     Only load if python-memcache is installed
     '''
-    return __virtualname__ if HAS_MEMCACHE else False
+    if HAS_MEMCACHE:
+        return __virtualname__
+    return (False, 'The memcached execution module cannot be loaded: '
+            'python memcache library not available.')
 
 
 def _connect(host=DEFAULT_HOST, port=DEFAULT_PORT):
@@ -49,7 +53,7 @@ def _connect(host=DEFAULT_HOST, port=DEFAULT_PORT):
     Returns a tuple of (user, host, port) with config, pillar, or default
     values assigned to missing values.
     '''
-    if str(port).isdigit():
+    if six.text_type(port).isdigit():
         return memcache.Client(['{0}:{1}'.format(host, port)], debug=0)
     raise SaltInvocationError('port must be an integer')
 
@@ -57,7 +61,7 @@ def _connect(host=DEFAULT_HOST, port=DEFAULT_PORT):
 def _check_stats(conn):
     '''
     Helper function to check the stats data passed into it, and raise an
-    execption if none are returned. Otherwise, the stats are returned.
+    exception if none are returned. Otherwise, the stats are returned.
     '''
     stats = conn.get_stats()
     if not stats:
@@ -116,9 +120,9 @@ def set_(key,
 
         salt '*' memcached.set <key> <value>
     '''
-    if not isinstance(time, integer_types):
+    if not isinstance(time, six.integer_types):
         raise SaltInvocationError('\'time\' must be an integer')
-    if not isinstance(min_compress_len, integer_types):
+    if not isinstance(min_compress_len, six.integer_types):
         raise SaltInvocationError('\'min_compress_len\' must be an integer')
     conn = _connect(host, port)
     _check_stats(conn)
@@ -138,7 +142,7 @@ def delete(key,
 
         salt '*' memcached.delete <key>
     '''
-    if not isinstance(time, integer_types):
+    if not isinstance(time, six.integer_types):
         raise SaltInvocationError('\'time\' must be an integer')
     conn = _connect(host, port)
     _check_stats(conn)
@@ -161,9 +165,9 @@ def add(key,
 
         salt '*' memcached.add <key> <value>
     '''
-    if not isinstance(time, integer_types):
+    if not isinstance(time, six.integer_types):
         raise SaltInvocationError('\'time\' must be an integer')
-    if not isinstance(min_compress_len, integer_types):
+    if not isinstance(min_compress_len, six.integer_types):
         raise SaltInvocationError('\'min_compress_len\' must be an integer')
     conn = _connect(host, port)
     _check_stats(conn)
@@ -192,9 +196,9 @@ def replace(key,
 
         salt '*' memcached.replace <key> <value>
     '''
-    if not isinstance(time, integer_types):
+    if not isinstance(time, six.integer_types):
         raise SaltInvocationError('\'time\' must be an integer')
-    if not isinstance(min_compress_len, integer_types):
+    if not isinstance(min_compress_len, six.integer_types):
         raise SaltInvocationError('\'min_compress_len\' must be an integer')
     conn = _connect(host, port)
     stats = conn.get_stats()
@@ -222,10 +226,10 @@ def increment(key, delta=1, host=DEFAULT_HOST, port=DEFAULT_PORT):
     cur = get(key)
 
     if cur is None:
-        raise CommandExecutionError('Key {0!r} does not exist'.format(key))
-    elif not isinstance(cur, integer_types):
+        raise CommandExecutionError('Key \'{0}\' does not exist'.format(key))
+    elif not isinstance(cur, six.integer_types):
         raise CommandExecutionError(
-            'Value for key {0!r} must be an integer to be '
+            'Value for key \'{0}\' must be an integer to be '
             'incremented'.format(key)
         )
 
@@ -234,7 +238,8 @@ def increment(key, delta=1, host=DEFAULT_HOST, port=DEFAULT_PORT):
     except ValueError:
         raise SaltInvocationError('Delta value must be an integer')
 
-incr = increment
+
+incr = salt.utils.functools.alias_function(increment, 'incr')
 
 
 def decrement(key, delta=1, host=DEFAULT_HOST, port=DEFAULT_PORT):
@@ -253,10 +258,10 @@ def decrement(key, delta=1, host=DEFAULT_HOST, port=DEFAULT_PORT):
 
     cur = get(key)
     if cur is None:
-        raise CommandExecutionError('Key {0!r} does not exist'.format(key))
-    elif not isinstance(cur, integer_types):
+        raise CommandExecutionError('Key \'{0}\' does not exist'.format(key))
+    elif not isinstance(cur, six.integer_types):
         raise CommandExecutionError(
-            'Value for key {0!r} must be an integer to be '
+            'Value for key \'{0}\' must be an integer to be '
             'decremented'.format(key)
         )
 
@@ -265,4 +270,5 @@ def decrement(key, delta=1, host=DEFAULT_HOST, port=DEFAULT_PORT):
     except ValueError:
         raise SaltInvocationError('Delta value must be an integer')
 
-decr = decrement
+
+decr = salt.utils.functools.alias_function(decrement, 'decr')

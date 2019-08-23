@@ -67,6 +67,9 @@ allow minions ending with foo.org access to the publisher.
         - ps.*
         - pkg.*
 
+.. note::
+    Functions are matched using regular expressions.
+
 Peer Runner Communication
 =========================
 
@@ -93,6 +96,9 @@ to the manage and jobs runner functions.
         - manage.*
         - jobs.*
 
+.. note::
+    Functions are matched using regular expressions.
+
 Using Peer Communication
 ========================
 
@@ -101,11 +107,11 @@ comes with a number of functions to execute peer communication in different
 ways. Currently there are three functions in the publish module. These examples
 will show how to test the peer system via the salt-call command.
 
-To execute test.ping on all minions:
+To execute test.version on all minions:
 
 .. code-block:: bash
 
-    # salt-call publish.publish \* test.ping
+    # salt-call publish.publish \* test.version
 
 To execute the manage.up runner:
 
@@ -113,8 +119,11 @@ To execute the manage.up runner:
 
     # salt-call publish.runner manage.up
 
-To match minions using other matchers, use ``expr_form``:
+To match minions using other matchers, use ``tgt_type``:
 
 .. code-block:: bash
 
-    # salt-call publish.publish 'webserv* and not G@os:Ubuntu' test.ping expr_form='compound'
+    # salt-call publish.publish 'webserv* and not G@os:Ubuntu' test.version tgt_type='compound'
+
+.. note::
+    In pre-2017.7.0 releases, use ``expr_form`` instead of ``tgt_type``.

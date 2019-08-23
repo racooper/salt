@@ -10,13 +10,14 @@ salt-ssh calls and return the data from them.
 No access control is needed because calls cannot originate from the minions.
 '''
 # Import python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function
 import copy
 import logging
 
 # Import salt libs
 import salt.client.ssh
 import salt.runner
+import salt.utils.args
 
 log = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ log = logging.getLogger(__name__)
 def _publish(tgt,
              fun,
              arg=None,
-             expr_form='glob',
+             tgt_type='glob',
              returner='',
              timeout=None,
              form='clean',
@@ -72,13 +73,15 @@ def _publish(tgt,
         arg = []
 
     # Set up opts for the SSH object
-    opts = copy.deepcopy(__opts__)
+    opts = copy.deepcopy(__context__['master_opts'])
+    minopts = copy.deepcopy(__opts__)
+    opts.update(minopts)
     if roster:
         opts['roster'] = roster
     if timeout:
         opts['timeout'] = timeout
     opts['argv'] = [fun] + arg
-    opts['selected_target_option'] = expr_form
+    opts['selected_target_option'] = tgt_type
     opts['tgt'] = tgt
     opts['arg'] = arg
 
@@ -105,7 +108,7 @@ def _publish(tgt,
 def publish(tgt,
             fun,
             arg=None,
-            expr_form='glob',
+            tgt_type='glob',
             returner='',
             timeout=5,
             roster=None):
@@ -122,11 +125,15 @@ def publish(tgt,
 
     Returners are not currently supported
 
-    The expr_form argument is used to pass a target other than a glob into
+    The tgt_type argument is used to pass a target other than a glob into
     the execution, the available options are:
 
     - glob
     - pcre
+
+    .. versionchanged:: 2017.7.0
+        The ``expr_form`` argument has been renamed to ``tgt_type``, earlier
+        releases must use ``expr_form``.
 
     The arguments sent to the minion publish function are separated with
     commas. This means that for a minion executing a command with multiple
@@ -166,7 +173,7 @@ def publish(tgt,
     return _publish(tgt,
                     fun,
                     arg=arg,
-                    expr_form=expr_form,
+                    tgt_type=tgt_type,
                     returner=returner,
                     timeout=timeout,
                     form='clean',
@@ -176,7 +183,7 @@ def publish(tgt,
 def full_data(tgt,
               fun,
               arg=None,
-              expr_form='glob',
+              tgt_type='glob',
               returner='',
               timeout=5,
               roster=None):
@@ -204,7 +211,7 @@ def full_data(tgt,
     return _publish(tgt,
                     fun,
                     arg=arg,
-                    expr_form=expr_form,
+                    tgt_type=tgt_type,
                     returner=returner,
                     timeout=timeout,
                     form='full',

@@ -2,18 +2,18 @@
 '''
 System Profiler Module
 
-Interface with Mac OSX's command-line System Profiler utility to get
+Interface with macOS's command-line System Profiler utility to get
 information about package receipts and installed applications.
 
 .. versionadded:: 2015.5.0
 
 '''
 
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals, print_function
 
 import plistlib
 import subprocess
-import salt.utils
+import salt.utils.path
 from salt.ext import six
 
 PROFILER_BINARY = '/usr/sbin/system_profiler'
@@ -23,12 +23,12 @@ def __virtual__():
     '''
     Check to see if the system_profiler binary is available
     '''
-    PROFILER_BINARY = salt.utils.which('system_profiler')
+    PROFILER_BINARY = salt.utils.path.which('system_profiler')
 
     if PROFILER_BINARY:
         return True
-    else:
-        return False
+    return (False, 'The system_profiler execution module cannot be loaded: '
+            'system_profiler unavailable.')
 
 
 def _call_system_profiler(datatype):

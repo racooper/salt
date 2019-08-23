@@ -5,9 +5,10 @@ Returners Directory
 :func:`get_returner_options` is a general purpose function that returners may
 use to fetch their configuration options.
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 import logging
+from salt.ext import six
 
 log = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ def get_returner_options(virtualname=None,
 
     :param str virtualname: The returner virtualname (as returned
         by __virtual__()
-    :param ret: result of the module that ran. dit-like object
+    :param ret: result of the module that ran. dict-like object
 
         May contain a `ret_config` key pointing to a string
         If a `ret_config` is specified, config options are read from::
@@ -98,6 +99,11 @@ def get_returner_options(virtualname=None,
         )
     )
 
+    # override some values with relevant options from
+    # keyword arguments passed via return_kwargs
+    if ret and 'ret_kwargs' in ret:
+        _options.update(ret['ret_kwargs'])
+
     return _options
 
 
@@ -111,7 +117,7 @@ def _fetch_ret_config(ret):
         return None
     if 'ret_config' not in ret:
         return ''
-    return str(ret['ret_config'])
+    return six.text_type(ret['ret_config'])
 
 
 def _fetch_option(cfg, ret_config, virtualname, attr_name):
@@ -131,7 +137,10 @@ def _fetch_option(cfg, ret_config, virtualname, attr_name):
     if not ret_config:
         # Using the default configuration key
         if isinstance(cfg, dict):
-            return c_cfg.get(attr_name, cfg.get(default_cfg_key))
+            if default_cfg_key in cfg:
+                return cfg[default_cfg_key]
+            else:
+                return c_cfg.get(attr_name)
         else:
             return c_cfg.get(attr_name, cfg(default_cfg_key))
 
@@ -181,7 +190,7 @@ def _options_browser(cfg, ret_config, defaults, virtualname, options):
                 continue
 
         # fallback (implicit else for all ifs)
-        yield option, ''
+        continue
 
 
 def _fetch_profile_opts(

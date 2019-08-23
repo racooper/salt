@@ -2,15 +2,17 @@
 '''
 Retrieve Pillar data by doing a SQLite3 query
 
-sqlite3 is included in the stdlib since python2.5.
+.. versionadded:: 2015.8.0
 
-This module is a concrete implementation of the sql_base ext_pillar for SQLite3.
+``sqlite3`` is included in the stdlib since Python 2.5.
 
-:maturity: new
+This module is a concrete implementation of the sql_base ext_pillar for
+SQLite3.
+
 :platform: all
 
 Configuring the sqlite3 ext_pillar
-=====================================
+==================================
 
 Use the 'sqlite3' key under ext_pillar for configuration of queries.
 
@@ -21,31 +23,30 @@ Note, timeout is in seconds.
 
 .. code-block:: yaml
 
-    pillar.sqlite3.database: /var/lib/salt/pillar.db
-    pillar.sqlite3.timeout: 5.0
+    sqlite3.database: /var/lib/salt/pillar.db
+    sqlite3.timeout: 5.0
 
 
-Complete example
-=====================================
+Complete Example
+================
 
 .. code-block:: yaml
 
-    pillar:
-      sqlite3:
-        database: '/var/lib/salt/pillar.db'
-        timeout: 5.0
+    sqlite3:
+      database: '/var/lib/salt/pillar.db'
+      timeout: 5.0
 
     ext_pillar:
       - sqlite3:
           fromdb:
             query: 'SELECT col1,col2,col3,col4,col5,col6,col7
                       FROM some_random_table
-                     WHERE minion_pattern LIKE %s'
+                     WHERE minion_pattern LIKE ?'
             depth: 5
             as_list: True
             with_lists: [1,3]
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import python libs
 from contextlib import contextmanager
@@ -78,10 +79,12 @@ class SQLite3ExtPillar(SqlBaseExtPillar):
         defaults = {'database': '/var/lib/salt/pillar.db',
                     'timeout': 5.0}
         _options = {}
-        _opts = __opts__.get('pillar', {}).get('sqlite3', {})
+        _opts = {}
+        if 'sqlite3' in __opts__ and 'database' in __opts__['sqlite3']:
+            _opts = __opts__.get('sqlite3', {})
         for attr in defaults:
             if attr not in _opts:
-                log.debug('Using default for SQLite3 pillar {0}'.format(attr))
+                log.debug('Using default for SQLite3 pillar %s', attr)
                 _options[attr] = defaults[attr]
                 continue
             _options[attr] = _opts[attr]
@@ -99,7 +102,7 @@ class SQLite3ExtPillar(SqlBaseExtPillar):
         try:
             yield cursor
         except sqlite3.Error as err:
-            log.exception('Error in ext_pillar SQLite3: {0}'.format(err.args))
+            log.exception('Error in ext_pillar SQLite3: %s', err.args)
         finally:
             conn.close()
 

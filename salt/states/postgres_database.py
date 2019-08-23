@@ -11,14 +11,16 @@ Databases can be set as either absent or present
     frank:
       postgres_database.present
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals, print_function
 
 
 def __virtual__():
     '''
     Only load if the postgres module is present
     '''
-    return 'postgres.user_exists' in __salt__
+    if 'postgres.user_exists' not in __salt__:
+        return (False, 'Unable to load postgres module.  Make sure `postgres.bins_dir` is set.')
+    return True
 
 
 def present(name,

@@ -1,14 +1,21 @@
 # -*- coding: utf-8 -*-
 '''
 Manage groups on FreeBSD
+
+.. important::
+    If you feel that Salt should be using this module to manage groups on a
+    minion, and it is using a different module (or gives an error similar to
+    *'group.info' is not available*), see :ref:`here
+    <module-provider-override>`.
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals, print_function
 
 # Import python libs
 import logging
 
 # Import salt libs
-import salt.utils
+import salt.utils.args
+import salt.utils.data
 
 
 log = logging.getLogger(__name__)
@@ -25,9 +32,12 @@ __virtualname__ = 'group'
 
 def __virtual__():
     '''
-    Set the user module if the kernel is Linux
+    Set the user module if the kernel is FreeBSD or Dragonfly
     '''
-    return __virtualname__ if __grains__['kernel'] == 'FreeBSD' else False
+    if __grains__.get('kernel') in ('FreeBSD', 'DragonFly'):
+        return __virtualname__
+    return (False, 'The pw_group execution module cannot be loaded: '
+            'system is not supported.')
 
 
 def add(name, gid=None, **kwargs):
@@ -40,8 +50,8 @@ def add(name, gid=None, **kwargs):
 
         salt '*' group.add foo 3456
     '''
-    kwargs = salt.utils.clean_kwargs(**kwargs)
-    if salt.utils.is_true(kwargs.pop('system', False)):
+    kwargs = salt.utils.args.clean_kwargs(**kwargs)
+    if salt.utils.data.is_true(kwargs.pop('system', False)):
         log.warning('pw_group module does not support the \'system\' argument')
     if kwargs:
         log.warning('Invalid kwargs passed to group.add')

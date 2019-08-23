@@ -4,8 +4,8 @@ Control Modjk via the Apache Tomcat "Status" worker
 (http://tomcat.apache.org/connectors-doc/reference/status.html)
 
 Below is an example of the configuration needed for this module. This
-configuration data can be placed either in :doc:`grains
-</topics/targeting/grains>` or :doc:`pillar </topics/pillar/index>`.
+configuration data can be placed either in :ref:`grains
+<targeting-grains>` or :ref:`pillar <salt-pillars>`.
 
 If using grains, this can be accomplished :ref:`statically
 <static-custom-grains>` or via a :ref:`grain module <writing-grains>`.
@@ -30,10 +30,11 @@ this module.
         realm: authentication realm2 for digest passwords
         timeout: 600
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import 3rd-party libs
 # pylint: disable=import-error,no-name-in-module
+from salt.ext import six
 from salt.ext.six.moves.urllib.parse import urlencode as _urlencode
 from salt.ext.six.moves.urllib.request import (
         HTTPBasicAuthHandler as _HTTPBasicAuthHandler,
@@ -81,7 +82,7 @@ def _do_http(opts, profile='default'):
         raise Exception('missing url in profile {0}'.format(profile))
 
     if user and passwd:
-        auth = _auth(url, realm, user, passwd)
+        auth = _auth(url=url, realm=realm, user=user, passwd=passwd)
         _install_opener(auth)
 
     url += '?{0}'.format(_urlencode(opts))
@@ -109,11 +110,6 @@ def _worker_ctl(worker, lbn, vwa, profile='default'):
         'vwa': vwa,
     }
     return _do_http(cmd, profile)['worker.result.type'] == 'OK'
-
-
-###############
-### General ###
-###############
 
 
 def version(profile='default'):
@@ -171,11 +167,6 @@ def dump_config(profile='default'):
         'mime': 'prop',
     }
     return _do_http(cmd, profile)
-
-
-####################
-### LB Functions ###
-####################
 
 
 def list_configured_members(lbn, profile='default'):
@@ -308,11 +299,6 @@ def lb_edit(lbn, settings, profile='default'):
     return _do_http(settings, profile)['worker.result.type'] == 'OK'
 
 
-########################
-### Worker Functions ###
-########################
-
-
 def bulk_stop(workers, lbn, profile='default'):
     '''
     Stop all the given workers in the specific load balancer
@@ -330,7 +316,7 @@ def bulk_stop(workers, lbn, profile='default'):
 
     ret = {}
 
-    if isinstance(workers, str):
+    if isinstance(workers, six.string_types):
         workers = workers.split(',')
 
     for worker in workers:
@@ -359,7 +345,7 @@ def bulk_activate(workers, lbn, profile='default'):
 
     ret = {}
 
-    if isinstance(workers, str):
+    if isinstance(workers, six.string_types):
         workers = workers.split(',')
 
     for worker in workers:
@@ -388,7 +374,7 @@ def bulk_disable(workers, lbn, profile='default'):
 
     ret = {}
 
-    if isinstance(workers, str):
+    if isinstance(workers, six.string_types):
         workers = workers.split(',')
 
     for worker in workers:
@@ -417,7 +403,7 @@ def bulk_recover(workers, lbn, profile='default'):
 
     ret = {}
 
-    if isinstance(workers, str):
+    if isinstance(workers, six.string_types):
         workers = workers.split(',')
 
     for worker in workers:

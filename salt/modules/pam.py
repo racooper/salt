@@ -2,22 +2,26 @@
 '''
 Support for pam
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals, print_function
 
 # Import python libs
 import os
+import logging
 
 # Import salt libs
-import salt.utils
+import salt.utils.files
+
+log = logging.getLogger(__name__)
+
+# Define the module's virtual name
+__virtualname__ = 'pam'
 
 
 def __virtual__():
     '''
-    Only load the module if iptables is installed
+    Set the virtual name for the module
     '''
-    if os.path.exists('/usr/lib/libpam.so'):
-        return 'pam'
-    return False
+    return __virtualname__
 
 
 def _parse(contents=None, file_name=None):
@@ -27,9 +31,10 @@ def _parse(contents=None, file_name=None):
     if contents:
         pass
     elif file_name and os.path.exists(file_name):
-        with salt.utils.fopen(file_name, 'r') as ifile:
-            contents = ifile.read()
+        with salt.utils.files.fopen(file_name, 'r') as ifile:
+            contents = salt.utils.stringutils.to_unicode(ifile.read())
     else:
+        log.error('File "%s" does not exist', file_name)
         return False
 
     rules = []

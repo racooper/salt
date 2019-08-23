@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 '''
-Management of Mongodb users
+Management of MongoDB Users
 ===========================
 
-.. note::
-    This module requires PyMongo to be installed.
+:depends:   - pymongo Python module
 '''
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Define the module's virtual name
 __virtualname__ = 'mongodb_user'
@@ -23,7 +23,9 @@ def present(name,
             user=None,
             password=None,
             host="localhost",
-            port=27017):
+            port=27017,
+            authdb=None,
+            roles=None):
     '''
     Ensure that the user is present with the specified properties
 
@@ -51,6 +53,12 @@ def present(name,
         .. note::
             If the database doesn't exist, it will be created.
 
+    authdb
+        The database in which to authenticate
+
+    roles
+        The roles assigned to user specified with the ``name`` parameter
+
     Example:
 
     .. code-block:: yaml
@@ -59,15 +67,24 @@ def present(name,
           mongodb_user.present:
           - name: myapp
           - passwd: password-of-myapp
+          - database: admin
           # Connect as admin:sekrit
           - user: admin
           - password: sekrit
+          - roles:
+              - readWrite
+              - userAdmin
+              - dbOwner
 
     '''
     ret = {'name': name,
            'changes': {},
            'result': True,
            'comment': 'User {0} is already present'.format(name)}
+
+    # setup default empty roles if not provided to preserve previous API interface
+    if roles is None:
+        roles = []
 
     # Check for valid port
     try:
@@ -78,14 +95,41 @@ def present(name,
         return ret
 
     # check if user exists
-    user_exists = __salt__['mongodb.user_exists'](name, user, password, host, port, database)
-    if user_exists is True:
+    users = __salt__['mongodb.user_find'](name, user, password, host, port, database, authdb)
+    if users:
+        # check for errors returned in users e.g.
+        #    users= (False, 'Failed to connect to MongoDB database localhost:27017')
+        #    users= (False, 'not authorized on admin to execute command { usersInfo: "root" }')
+        if not users[0]:
+            ret['result'] = False
+            ret['comment'] = "Mongo Err: {0}".format(users[1])
+            return ret
+
+        # check each user occurrence
+        for usr in users:
+            # prepare empty list for current roles
+            current_roles = []
+            # iterate over user roles and append each to current_roles list
+            for role in usr['roles']:
+                # check correct database to be sure to fill current_roles only for desired db
+                if role['db'] == database:
+                    current_roles.append(role['role'])
+
+            # fill changes if the roles and current roles differ
+            if not set(current_roles) == set(roles):
+                ret['changes'].update({name: {'database': database, 'roles': {'old': current_roles, 'new': roles}}})
+                ret['comment'] = 'User {0} is already present, but has new roles'.format(name)
+                ret['result'] = None
+
+            if not __opts__['test']:
+                __salt__['mongodb.user_create'](name, passwd, user, password, host, port, database=database, authdb=authdb, roles=roles)
+                ret['result'] = True
         return ret
 
     # if the check does not return a boolean, return an error
     # this may be the case if there is a database connection error
-    if not isinstance(user_exists, bool):
-        ret['comment'] = user_exists
+    if not isinstance(users, list):
+        ret['comment'] = users
         ret['result'] = False
         return ret
 
@@ -95,7 +139,7 @@ def present(name,
                 ).format(name)
         return ret
     # The user is not present, make it!
-    if __salt__['mongodb.user_create'](name, passwd, user, password, host, port, database=database):
+    if __salt__['mongodb.user_create'](name, passwd, user, password, host, port, database=database, authdb=authdb, roles=roles):
         ret['comment'] = 'User {0} has been created'.format(name)
         ret['changes'][name] = 'Present'
     else:
@@ -110,7 +154,8 @@ def absent(name,
            password=None,
            host=None,
            port=None,
-           database="admin"):
+           database="admin",
+           authdb=None):
     '''
     Ensure that the named user is absent
 
@@ -132,6 +177,9 @@ def absent(name,
     database
         The database from which to remove the user specified by the ``name``
         parameter
+
+    authdb
+        The database in which to authenticate
     '''
     ret = {'name': name,
            'changes': {},
@@ -139,14 +187,14 @@ def absent(name,
            'comment': ''}
 
     #check if user exists and remove it
-    user_exists = __salt__['mongodb.user_exists'](name, user, password, host, port, database=database)
+    user_exists = __salt__['mongodb.user_exists'](name, user, password, host, port, database=database, authdb=authdb)
     if user_exists is True:
         if __opts__['test']:
             ret['result'] = None
             ret['comment'] = ('User {0} is present and needs to be removed'
                     ).format(name)
             return ret
-        if __salt__['mongodb.user_remove'](name, user, password, host, port, database=database):
+        if __salt__['mongodb.user_remove'](name, user, password, host, port, database=database, authdb=authdb):
             ret['comment'] = 'User {0} has been removed'.format(name)
             ret['changes'][name] = 'Absent'
             return ret
@@ -159,6 +207,5 @@ def absent(name,
         return ret
 
     # fallback
-    ret['comment'] = ('User {0} is not present, so it cannot be removed'
-            ).format(name)
+    ret['comment'] = 'User {0} is not present'.format(name)
     return ret

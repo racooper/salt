@@ -9,15 +9,19 @@ Enable and disable apache modules.
 .. code-block:: yaml
 
     Enable cgi module:
-        apache_module.enable:
-            - name: cgi
+      apache_module.enabled:
+        - name: cgi
 
     Disable cgi module:
-        apache_module.disable:
-            - name: cgi
+      apache_module.disabled:
+        - name: cgi
 '''
-from __future__ import absolute_import
-from salt.ext.six import string_types
+
+# Import Python libs
+from __future__ import absolute_import, print_function, unicode_literals
+
+# Import salt libs
+from salt.ext import six
 
 
 def __virtual__():
@@ -27,16 +31,18 @@ def __virtual__():
     return 'apache_module' if 'apache.a2enmod' in __salt__ else False
 
 
-def enable(name):
+def enabled(name):
     '''
     Ensure an Apache module is enabled.
+
+    .. versionadded:: 2016.3.0
 
     name
         Name of the Apache module
     '''
     ret = {'name': name, 'result': True, 'comment': '', 'changes': {}}
 
-    is_enabled = __salt__['apache.check_mod_enabled']('{0}.load'.format(name))
+    is_enabled = __salt__['apache.check_mod_enabled'](name)
     if not is_enabled:
         if __opts__['test']:
             msg = 'Apache module {0} is set to be enabled.'.format(name)
@@ -46,14 +52,14 @@ def enable(name):
             ret['result'] = None
             return ret
         status = __salt__['apache.a2enmod'](name)['Status']
-        if isinstance(status, string_types) and 'enabled' in status:
+        if isinstance(status, six.string_types) and 'enabled' in status:
             ret['result'] = True
             ret['changes']['old'] = None
             ret['changes']['new'] = name
         else:
             ret['result'] = False
             ret['comment'] = 'Failed to enable {0} Apache module'.format(name)
-            if isinstance(status, string_types):
+            if isinstance(status, six.string_types):
                 ret['comment'] = ret['comment'] + ' ({0})'.format(status)
             return ret
     else:
@@ -61,16 +67,18 @@ def enable(name):
     return ret
 
 
-def disable(name):
+def disabled(name):
     '''
     Ensure an Apache module is disabled.
+
+    .. versionadded:: 2016.3.0
 
     name
         Name of the Apache module
     '''
     ret = {'name': name, 'result': True, 'comment': '', 'changes': {}}
 
-    is_enabled = __salt__['apache.check_mod_enabled']('{0}.load'.format(name))
+    is_enabled = __salt__['apache.check_mod_enabled'](name)
     if is_enabled:
         if __opts__['test']:
             msg = 'Apache module {0} is set to be disabled.'.format(name)
@@ -80,14 +88,14 @@ def disable(name):
             ret['result'] = None
             return ret
         status = __salt__['apache.a2dismod'](name)['Status']
-        if isinstance(status, string_types) and 'disabled' in status:
+        if isinstance(status, six.string_types) and 'disabled' in status:
             ret['result'] = True
             ret['changes']['old'] = name
             ret['changes']['new'] = None
         else:
             ret['result'] = False
             ret['comment'] = 'Failed to disable {0} Apache module'.format(name)
-            if isinstance(status, string_types):
+            if isinstance(status, six.string_types):
                 ret['comment'] = ret['comment'] + ' ({0})'.format(status)
             return ret
     else:

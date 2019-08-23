@@ -10,7 +10,7 @@ or removed.
     dos2unix:
       cyg.installed
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 import logging
 
 LOG = logging.getLogger(__name__)
@@ -58,7 +58,7 @@ def installed(name,
  be one of \'x86\' or \'x86_64\''
         return ret
 
-    LOG.debug('Installed State: Initial Mirror list: {0}'.format(mirrors))
+    LOG.debug('Installed State: Initial Mirror list: %s', mirrors)
 
     if not __salt__['cyg.check_valid_package'](name,
                                                cyg_arch=cyg_arch,
@@ -187,7 +187,7 @@ def updated(name=None, cyg_arch='x86_64', mirrors=None):
         return ret
 
     if not mirrors:
-        LOG.warn('No mirror given, using the default.')
+        LOG.warning('No mirror given, using the default.')
 
     before = __salt__['cyg.list'](cyg_arch=cyg_arch)
     if __salt__['cyg.update'](cyg_arch, mirrors=mirrors):

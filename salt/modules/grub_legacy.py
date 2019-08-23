@@ -2,13 +2,13 @@
 '''
 Support for GRUB Legacy
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import python libs
 import os
 
 # Import salt libs
-import salt.utils
+import salt.utils.files
 import salt.utils.decorators as decorators
 from salt.exceptions import CommandExecutionError
 
@@ -22,7 +22,8 @@ def __virtual__():
     '''
     if os.path.exists(_detect_conf()):
         return __virtualname__
-    return False
+    return (False, 'The grub_legacy execution module cannot be loaded: '
+       'the grub config file does not exist in /boot/grub/')
 
 
 @decorators.memoize
@@ -30,7 +31,7 @@ def _detect_conf():
     '''
     GRUB conf location differs depending on distro
     '''
-    if __grains__['os_family'] == 'RedHat':
+    if __grains__.get('os_family') == 'RedHat':
         return '/boot/grub/grub.conf'
     # Defaults for Ubuntu, Debian, Arch, and others
     return '/boot/grub/menu.lst'
@@ -67,8 +68,9 @@ def conf():
     ret = {}
     pos = 0
     try:
-        with salt.utils.fopen(_detect_conf(), 'r') as _fp:
+        with salt.utils.files.fopen(_detect_conf(), 'r') as _fp:
             for line in _fp:
+                line = salt.utils.stringutils.to_unicode(line)
                 if line.startswith('#'):
                     continue
                 if line.startswith('\n'):
@@ -101,7 +103,7 @@ def conf():
                 stanzas.append(stanza)
     except (IOError, OSError) as exc:
         msg = "Could not read grub config: {0}"
-        raise CommandExecutionError(msg.format(str(exc)))
+        raise CommandExecutionError(msg.format(exc))
 
     ret['stanzas'] = []
     for stanza in stanzas:

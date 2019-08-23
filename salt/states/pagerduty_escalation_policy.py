@@ -35,6 +35,9 @@ For example:
                   escalation_delay_in_minutes: 15
 '''
 
+# Import Python libs
+from __future__ import absolute_import, print_function, unicode_literals
+
 
 def __virtual__():
     '''
@@ -49,7 +52,7 @@ def present(profile='pagerduty', subdomain=None, api_key=None, **kwargs):
 
     This method accepts as args everything defined in
     https://developer.pagerduty.com/documentation/rest/escalation_policies/create.
-    In additonal, user and schedule id's will be translated from name (or email address)
+    In addition, user and schedule id's will be translated from name (or email address)
     into PagerDuty unique ids.  For example:
 
     .. code-block:: yaml
@@ -91,7 +94,7 @@ def present(profile='pagerduty', subdomain=None, api_key=None, **kwargs):
                 if schedule:
                     target_id = schedule['schedule']['id']
             if target_id is None:
-                raise Exception('unidentified target: {0}'.format(str(target)))
+                raise Exception('unidentified target: {0}'.format(target))
             target['id'] = target_id
 
     r = __salt__['pagerduty_util.resource_present']('escalation_policies',
@@ -134,7 +137,10 @@ def _diff(state_data, resource_object):
             v = _escalation_rules_to_string(v)
             resource_value = _escalation_rules_to_string(resource_object[k])
         else:
-            resource_value = resource_object[k]
+            if k not in resource_object.keys():
+                objects_differ = True
+            else:
+                resource_value = resource_object[k]
         if v != resource_value:
             objects_differ = '{0} {1} {2}'.format(k, v, resource_value)
             break

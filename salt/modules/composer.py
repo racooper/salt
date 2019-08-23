@@ -2,15 +2,20 @@
 '''
 Use composer to install PHP dependencies for a directory
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import python libs
 import logging
 import os.path
 
 # Import salt libs
-import salt.utils
-from salt.exceptions import CommandExecutionError, CommandNotFoundError, SaltInvocationError
+import salt.utils.args
+import salt.utils.path
+from salt.exceptions import (
+    CommandExecutionError,
+    CommandNotFoundError,
+    SaltInvocationError
+)
 
 log = logging.getLogger(__name__)
 
@@ -31,7 +36,7 @@ def _valid_composer(composer):
     '''
     Validate the composer file is indeed there.
     '''
-    if salt.utils.which(composer):
+    if salt.utils.path.which(composer):
         return True
     return False
 
@@ -56,19 +61,20 @@ def did_composer_install(dir):
 
 
 def _run_composer(action,
-            dir=None,
-            composer=None,
-            php=None,
-            runas=None,
-            prefer_source=None,
-            prefer_dist=None,
-            no_scripts=None,
-            no_plugins=None,
-            optimize=None,
-            no_dev=None,
-            quiet=False,
-            composer_home='/root',
-            extra_flags=None):
+                  directory=None,
+                  composer=None,
+                  php=None,
+                  runas=None,
+                  prefer_source=None,
+                  prefer_dist=None,
+                  no_scripts=None,
+                  no_plugins=None,
+                  optimize=None,
+                  no_dev=None,
+                  quiet=False,
+                  composer_home='/root',
+                  extra_flags=None,
+                  env=None):
     '''
     Run PHP's composer with a specific action.
 
@@ -79,7 +85,7 @@ def _run_composer(action,
     action
         The action to pass to composer ('install', 'update', 'selfupdate', etc).
 
-    dir
+    directory
         Directory location of the composer.json file.  Required except when
         action='selfupdate'
 
@@ -121,6 +127,9 @@ def _run_composer(action,
 
     extra_flags
         None, or a string containing extra flags to pass to composer.
+
+    env
+        A list of environment variables to be set prior to execution.
     '''
     if composer is not None:
         if php is None:
@@ -130,57 +139,65 @@ def _run_composer(action,
 
     # Validate Composer is there
     if not _valid_composer(composer):
-        raise CommandNotFoundError('\'composer.{0}\' is not available. Couldn\'t find {1!r}.'
-                                   .format(action, composer))
-
-    # Don't need a dir for the 'selfupdate' action; all other actions do need a dir
-    if dir is None and action != 'selfupdate':
-        raise SaltInvocationError('{0!r} is required for \'composer.{1}\''
-                                  .format('dir', action))
+        raise CommandNotFoundError(
+            '\'composer.{0}\' is not available. Couldn\'t find \'{1}\'.'
+            .format(action, composer)
+        )
 
     if action is None:
-        raise SaltInvocationError('{0!r} is required for {1!r}'
-                                  .format('action', 'composer._run_composer'))
+        raise SaltInvocationError('The \'action\' argument is required')
+
+    # Don't need a dir for the 'selfupdate' action; all other actions do need a dir
+    if directory is None and action != 'selfupdate':
+        raise SaltInvocationError(
+            'The \'directory\' argument is required for composer.{0}'.format(action)
+        )
 
     # Base Settings
-    cmd = '{0} {1} {2}'.format(composer, action, '--no-interaction --no-ansi')
+    cmd = [composer, action, '--no-interaction', '--no-ansi']
 
     if extra_flags is not None:
-        cmd = '{0} {1}'.format(cmd, extra_flags)
+        cmd.extend(salt.utils.args.shlex_split(extra_flags))
 
     # If php is set, prepend it
     if php is not None:
-        cmd = php + ' ' + cmd
+        cmd = [php] + cmd
 
     # Add Working Dir
-    if dir is not None:
-        cmd += ' --working-dir=' + dir
+    if directory is not None:
+        cmd.extend(['--working-dir', directory])
 
     # Other Settings
     if quiet is True:
-        cmd += ' --quiet'
+        cmd.append('--quiet')
 
     if no_dev is True:
-        cmd += ' --no-dev'
+        cmd.append('--no-dev')
 
     if prefer_source is True:
-        cmd += ' --prefer-source'
+        cmd.append('--prefer-source')
 
     if prefer_dist is True:
-        cmd += ' --prefer-dist'
+        cmd.append('--prefer-dist')
 
     if no_scripts is True:
-        cmd += ' --no-scripts'
+        cmd.append('--no-scripts')
 
     if no_plugins is True:
-        cmd += ' --no-plugins'
+        cmd.append('--no-plugins')
 
     if optimize is True:
-        cmd += ' --optimize-autoloader'
+        cmd.append('--optimize-autoloader')
+
+    if env is not None:
+        env = salt.utils.data.repack_dictlist(env)
+        env['COMPOSER_HOME'] = composer_home
+    else:
+        env = {'COMPOSER_HOME': composer_home}
 
     result = __salt__['cmd.run_all'](cmd,
                                      runas=runas,
-                                     env={'COMPOSER_HOME': composer_home},
+                                     env=env,
                                      python_shell=False)
 
     if result['retcode'] != 0:
@@ -192,7 +209,7 @@ def _run_composer(action,
     return result
 
 
-def install(dir,
+def install(directory,
             composer=None,
             php=None,
             runas=None,
@@ -203,7 +220,8 @@ def install(dir,
             optimize=None,
             no_dev=None,
             quiet=False,
-            composer_home='/root'):
+            composer_home='/root',
+            env=None):
     '''
     Install composer dependencies for a directory.
 
@@ -211,7 +229,7 @@ def install(dir,
     system PATH & making it executable, the ``composer`` and ``php`` parameters
     will need to be set to the location of the executables.
 
-    dir
+    directory
         Directory location of the composer.json file.
 
     composer
@@ -249,6 +267,9 @@ def install(dir,
 
     composer_home
         $COMPOSER_HOME environment variable
+
+    env
+        A list of environment variables to be set prior to execution.
 
     CLI Example:
 
@@ -260,7 +281,7 @@ def install(dir,
             no_dev=True optimize=True
     '''
     result = _run_composer('install',
-                           dir=dir,
+                           directory=directory,
                            composer=composer,
                            php=php,
                            runas=runas,
@@ -271,22 +292,24 @@ def install(dir,
                            optimize=optimize,
                            no_dev=no_dev,
                            quiet=quiet,
-                           composer_home=composer_home)
+                           composer_home=composer_home,
+                           env=env)
     return result
 
 
-def update(dir,
-            composer=None,
-            php=None,
-            runas=None,
-            prefer_source=None,
-            prefer_dist=None,
-            no_scripts=None,
-            no_plugins=None,
-            optimize=None,
-            no_dev=None,
-            quiet=False,
-            composer_home='/root'):
+def update(directory,
+           composer=None,
+           php=None,
+           runas=None,
+           prefer_source=None,
+           prefer_dist=None,
+           no_scripts=None,
+           no_plugins=None,
+           optimize=None,
+           no_dev=None,
+           quiet=False,
+           composer_home='/root',
+           env=None):
     '''
     Update composer dependencies for a directory.
 
@@ -297,7 +320,7 @@ def update(dir,
     system PATH & making it executable, the ``composer`` and ``php`` parameters
     will need to be set to the location of the executables.
 
-    dir
+    directory
         Directory location of the composer.json file.
 
     composer
@@ -336,6 +359,9 @@ def update(dir,
     composer_home
         $COMPOSER_HOME environment variable
 
+    env
+        A list of environment variables to be set prior to execution.
+
     CLI Example:
 
     .. code-block:: bash
@@ -346,8 +372,8 @@ def update(dir,
             no_dev=True optimize=True
     '''
     result = _run_composer('update',
+                           directory=directory,
                            extra_flags='--no-progress',
-                           dir=dir,
                            composer=composer,
                            php=php,
                            runas=runas,
@@ -358,7 +384,8 @@ def update(dir,
                            optimize=optimize,
                            no_dev=no_dev,
                            quiet=quiet,
-                           composer_home=composer_home)
+                           composer_home=composer_home,
+                           env=env)
     return result
 
 

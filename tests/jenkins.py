@@ -13,14 +13,17 @@ import glob
 import os
 import re
 import sys
-import json
 import time
 import shutil
 import optparse
 import subprocess
+import random
 
 # Import Salt libs
-import salt.utils
+import salt.utils.files
+import salt.utils.json
+import salt.utils.stringutils
+import salt.utils.yaml
 try:
     from salt.utils.nb_popen import NonBlockingPopen
 except ImportError:
@@ -42,7 +45,6 @@ except ImportError:
         from nb_popen import NonBlockingPopen
 
 # Import 3rd-party libs
-import yaml
 try:
     import requests
     HAS_REQUESTS = True
@@ -75,7 +77,7 @@ def build_pillar_data(options):
         pillar['package_artifact_dir'] = options.package_artifact_dir
     if options.pillar:
         pillar.update(dict(options.pillar))
-    return yaml.dump(pillar, default_flow_style=True, indent=0, width=sys.maxint).rstrip()
+    return salt.utils.yaml.safe_dump(pillar, default_flow_style=True, indent=0, width=sys.maxint).rstrip()
 
 
 def build_minion_target(options, vm_name):
@@ -153,11 +155,10 @@ def echo_parseable_environment(options, parser):
             '.github_token'
         )
         if os.path.isfile(github_access_token_path):
-            headers = {
-                'Authorization': 'token {0}'.format(
-                    open(github_access_token_path).read().strip()
-                )
-            }
+            with salt.utils.files.fopen(github_access_token_path) as rfh:
+                headers = {
+                    'Authorization': 'token {0}'.format(rfh.read().strip())
+                }
 
         http_req = requests.get(url, headers=headers)
         if http_req.status_code != 200:
@@ -404,6 +405,11 @@ def run(opts):
                 **opts.__dict__
             )
         )
+    if opts.splay is not None:
+        # Sleep a random number of seconds
+        cloud_downtime = random.randint(0, opts.splay)
+        print('Sleeping random period before calling salt-cloud: {0}'.format(cloud_downtime))
+        time.sleep(cloud_downtime)
     print('Running CMD: {0}'.format(cmd))
     sys.stdout.flush()
 
@@ -428,9 +434,11 @@ def run(opts):
     print('VM Bootstrapped. Exit code: {0}'.format(retcode))
     sys.stdout.flush()
 
-    print('Sleeping for 5 seconds to allow the minion to breathe a little')
+    # Sleep a random number of seconds
+    bootstrap_downtime = random.randint(0, opts.splay)
+    print('Sleeping for {0} seconds to allow the minion to breathe a little'.format(bootstrap_downtime))
     sys.stdout.flush()
-    time.sleep(5)
+    time.sleep(bootstrap_downtime)
 
     if opts.bootstrap_salt_commit is not None:
         # Let's find out if the installed version matches the passed in pillar
@@ -455,7 +463,7 @@ def run(opts):
                 delete_vm(opts)
             sys.exit(retcode)
 
-        outstr = salt.utils.to_str(stdout).strip()
+        outstr = salt.utils.stringutils.to_str(stdout).strip()
         if not outstr:
             print('Failed to get the bootstrapped minion version(no output). Exit code: {0}'.format(retcode))
             sys.stdout.flush()
@@ -464,7 +472,7 @@ def run(opts):
             sys.exit(retcode)
 
         try:
-            version_info = json.loads(outstr)
+            version_info = salt.utils.json.loads(outstr)
             bootstrap_minion_version = os.environ.get(
                 'SALT_MINION_BOOTSTRAP_RELEASE',
                 opts.bootstrap_salt_commit[:7]
@@ -491,7 +499,8 @@ def run(opts):
 
     if opts.cloud_only:
         # Run Cloud Provider tests preparation SLS
-        time.sleep(3)
+        cloud_provider_downtime = random.randint(3, opts.splay)
+        time.sleep(cloud_provider_downtime)
         cmd = (
             'salt -t 900 {target} state.sls {cloud_prep_sls} pillar="{pillar}" '
             '--no-color'.format(
@@ -502,7 +511,8 @@ def run(opts):
         )
     else:
         # Run standard preparation SLS
-        time.sleep(3)
+        standard_sls_downtime = random.randint(3, opts.splay)
+        time.sleep(standard_sls_downtime)
         cmd = (
             'salt -t 1800 {target} state.sls {prep_sls} pillar="{pillar}" '
             '--no-color'.format(
@@ -523,9 +533,9 @@ def run(opts):
     stdout, stderr = proc.communicate()
 
     if stdout:
-        print(salt.utils.to_str(stdout))
+        print(salt.utils.stringutils.to_str(stdout))
     if stderr:
-        print(salt.utils.to_str(stderr))
+        print(salt.utils.stringutils.to_str(stderr))
     sys.stdout.flush()
 
     retcode = proc.returncode
@@ -537,7 +547,8 @@ def run(opts):
         sys.exit(retcode)
 
     if opts.cloud_only:
-        time.sleep(3)
+        cloud_provider_pillar = random.randint(3, opts.splay)
+        time.sleep(cloud_provider_pillar)
         # Run Cloud Provider tests pillar preparation SLS
         cmd = (
             'salt -t 600 {target} state.sls {cloud_prep_sls} pillar="{pillar}" '
@@ -562,7 +573,7 @@ def run(opts):
             # DO NOT print the state return here!
             print('Cloud configuration files provisioned via pillar.')
         if stderr:
-            print(salt.utils.to_str(stderr))
+            print(salt.utils.stringutils.to_str(stderr))
         sys.stdout.flush()
 
         retcode = proc.returncode
@@ -574,7 +585,8 @@ def run(opts):
             sys.exit(retcode)
 
     if opts.prep_sls_2 is not None:
-        time.sleep(3)
+        sls_2_downtime = random.randint(3, opts.splay)
+        time.sleep(sls_2_downtime)
 
         # Run the 2nd preparation SLS
         cmd = (
@@ -597,9 +609,9 @@ def run(opts):
         stdout, stderr = proc.communicate()
 
         if stdout:
-            print(salt.utils.to_str(stdout))
+            print(salt.utils.stringutils.to_str(stdout))
         if stderr:
-            print(salt.utils.to_str(stderr))
+            print(salt.utils.stringutils.to_str(stderr))
         sys.stdout.flush()
 
         retcode = proc.returncode
@@ -612,7 +624,8 @@ def run(opts):
 
     # Run remote checks
     if opts.test_git_url is not None:
-        time.sleep(1)
+        test_git_downtime = random.randint(1, opts.splay)
+        time.sleep(test_git_downtime)
         # Let's find out if the cloned repository if checked out from the
         # desired repository
         print('Grabbing the cloned repository remotes information ... ')
@@ -644,7 +657,7 @@ def run(opts):
             sys.exit(retcode)
 
         try:
-            remotes_info = json.loads(stdout.strip())
+            remotes_info = salt.utils.json.loads(stdout.strip())
             if remotes_info is None or remotes_info[vm_name] is None or opts.test_git_url not in remotes_info[vm_name]:
                 print('The cloned repository remote is not the desired one:')
                 print(' \'{0}\' is not in {1}'.format(opts.test_git_url, remotes_info))
@@ -654,10 +667,11 @@ def run(opts):
                 sys.exit(retcode)
             print('matches!')
         except ValueError:
-            print('Failed to load any JSON from \'{0}\''.format(salt.utils.to_str(stdout).strip()))
+            print('Failed to load any JSON from \'{0}\''.format(salt.utils.stringutils.to_str(stdout).strip()))
 
     if opts.test_git_commit is not None:
-        time.sleep(1)
+        test_git_commit_downtime = random.randint(1, opts.splay)
+        time.sleep(test_git_commit_downtime)
 
         # Let's find out if the cloned repository is checked out at the desired
         # commit
@@ -690,7 +704,7 @@ def run(opts):
             sys.exit(retcode)
 
         try:
-            revision_info = json.loads(stdout.strip())
+            revision_info = salt.utils.json.loads(stdout.strip())
             if revision_info[vm_name][7:] != opts.test_git_commit[7:]:
                 print('The cloned repository commit is not the desired one:')
                 print(' \'{0}\' != \'{1}\''.format(revision_info[vm_name][:7], opts.test_git_commit[:7]))
@@ -700,10 +714,11 @@ def run(opts):
                 sys.exit(retcode)
             print('matches!')
         except ValueError:
-            print('Failed to load any JSON from \'{0}\''.format(salt.utils.to_str(stdout).strip()))
+            print('Failed to load any JSON from \'{0}\''.format(salt.utils.stringutils.to_str(stdout).strip()))
 
     # Run tests here
-    time.sleep(3)
+    test_begin_downtime = random.randint(3, opts.splay)
+    time.sleep(test_begin_downtime)
     cmd = (
         'salt -t 1800 {target} state.sls {sls} pillar="{pillar}" --no-color'.format(
             sls=opts.sls,
@@ -722,11 +737,11 @@ def run(opts):
     )
     stdout, stderr = proc.communicate()
 
-    outstr = salt.utils.to_str(stdout)
+    outstr = salt.utils.stringutils.to_str(stdout)
     if outstr:
         print(outstr)
     if stderr:
-        print(salt.utils.to_str(stderr))
+        print(salt.utils.stringutils.to_str(stderr))
     sys.stdout.flush()
 
     try:
@@ -766,9 +781,9 @@ def run(opts):
         stdout, stderr = proc.communicate()
 
         if stdout:
-            print(salt.utils.to_str(stdout))
+            print(salt.utils.stringutils.to_str(stdout))
         if stderr:
-            print(salt.utils.to_str(stderr))
+            print(salt.utils.stringutils.to_str(stderr))
         sys.stdout.flush()
 
         # Grab packages and log file (or just log file if build failed)
@@ -833,9 +848,9 @@ def parse():
     parser.add_option(
         '--test-transport',
         default='zeromq',
-        choices=('zeromq', 'raet', 'tcp'),
+        choices=('zeromq', 'tcp'),
         help=('Select which transport to run the integration tests with, '
-              'zeromq, raet, or tcp. Default: %default')
+              'zeromq or tcp. Default: %default')
     )
     parser.add_option(
         '--test-without-coverage',
@@ -946,6 +961,11 @@ def parse():
         help='Location on the minion from which packages should be '
              'retrieved (default: %default)',
     )
+    parser.add_option(
+        '--splay',
+        default='10',
+        help='The number of seconds across which calls to provisioning components should be made'
+    )
 
     options, args = parser.parse_args()
 
@@ -980,6 +1000,7 @@ def parse():
         parser.exit('--commit or --pull-request is required')
 
     return options
+
 
 if __name__ == '__main__':
     exit_code = run(parse())

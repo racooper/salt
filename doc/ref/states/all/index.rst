@@ -1,8 +1,8 @@
 .. _all-salt.states:
 
-==================================
-Full list of builtin state modules
-==================================
+=============
+state modules
+=============
 
 .. currentmodule:: salt.states
 
@@ -10,92 +10,190 @@ Full list of builtin state modules
     :toctree:
     :template: autosummary.rst.tmpl
 
+    acme
     alias
     alternatives
+    ansiblegate
     apache
+    apache_conf
     apache_module
+    apache_site
     aptpkg
     archive
     artifactory
     at
     augeas
     aws_sqs
+    azurearm_compute
+    azurearm_dns
+    azurearm_network
+    azurearm_resource
     beacon
     bigip
     blockdev
+    bluecoat_sslv
+    boto3_elasticache
+    boto3_route53
+    boto3_sns
+    boto_apigateway
     boto_asg
     boto_cfn
+    boto_cloudfront
+    boto_cloudtrail
     boto_cloudwatch_alarm
+    boto_cloudwatch_event
+    boto_cognitoidentity
+    boto_datapipeline
     boto_dynamodb
     boto_ec2
     boto_elasticache
+    boto_elasticsearch_domain
     boto_elb
+    boto_elbv2
     boto_iam
     boto_iam_role
+    boto_iot
+    boto_kinesis
     boto_kms
+    boto_lambda
     boto_lc
     boto_rds
     boto_route53
+    boto_s3
+    boto_s3_bucket
     boto_secgroup
     boto_sns
     boto_sqs
     boto_vpc
     bower
+    btrfs
     cabal
+    ceph
     chef
+    chocolatey
+    chronos_job
+    cimc
+    cisconso
     cloud
     cmd
     composer
+    consul
+    cpan
     cron
+    cryptdev
+    csf
     cyg
     ddns
     debconfmod
+    dellchassis
     disk
-    dockerio
-    dockerng
+    docker_container
+    docker_image
+    docker_network
+    docker_volume
     drac
+    dracr
+    dvs
+    elasticsearch
     elasticsearch_index
     elasticsearch_index_template
     environ
     eselect
     etcd_mod
+    ethtool
+    esxcluster
+    esxdatacenter
+    esxi
+    esxvm
     event
     file
+    firewall
     firewalld
+    flatpak
     gem
     git
+    github
+    glance
+    glance_image
+    glassfish
     glusterfs
     gnomedesktop
+    gpg
     grafana
+    grafana4_dashboard
+    grafana4_datasource
+    grafana4_org
+    grafana4_user
+    grafana_dashboard
+    grafana_datasource
     grains
     group
+    heat
     hg
-    hipchat
+    highstate_doc
     host
-    htpasswd
     http
+    icinga2
     ifttt
     incron
+    influxdb08_database
+    influxdb08_user
+    influxdb_continuous_query
     influxdb_database
+    influxdb_retention_policy
     influxdb_user
+    infoblox_a
+    infoblox_cname
+    infoblox_host_record
+    infoblox_range
     ini_manage
     ipmi
     ipset
     iptables
     jboss7
+    jenkins
+    junos
+    kapacitor
+    kernelpkg
     keyboard
     keystone
+    keystone_domain
+    keystone_endpoint
+    keystone_group
+    keystone_project
+    keystone_role
+    keystone_role_grant
+    keystone_service
+    keystone_user
+    keystore
     kmod
+    kubernetes
     layman
-    libvirt
+    ldap
+    libcloud_dns
+    libcloud_loadbalancer
+    libcloud_storage
     linux_acl
     locale
+    logadm
+    logrotate
+    loop
     lvm
     lvs_server
     lvs_service
     lxc
+    lxd
+    lxd_container
+    lxd_image
+    lxd_profile
+    mac_assistive
+    macdefaults
+    mac_keychain
+    macpackage
+    mac_xattr
     makeconf
-    mdadm
+    marathon_app
+    mdadm_raid
     memcached
     modjk
     modjk_worker
@@ -104,21 +202,50 @@ Full list of builtin state modules
     mongodb_user
     monit
     mount
+    mssql_database
+    mssql_login
+    mssql_role
+    mssql_user
+    msteams
     mysql_database
     mysql_grants
     mysql_query
     mysql_user
+    netacl
+    netconfig
+    netntp
+    netsnmp
+    netusers
     network
+    net_napalm_yang
+    neutron_network
+    neutron_secgroup
+    neutron_secgroup_rule
+    neutron_subnet
+    nexus
+    nfs_export
     nftables
+    nova
     npm
     ntp
+    nxos
+    nxos_upgrade
+    onyx
     openstack_config
+    openvswitch_bridge
+    openvswitch_db
+    openvswitch_port
+    opsgenie
     pagerduty
     pagerduty_escalation_policy
     pagerduty_schedule
     pagerduty_service
     pagerduty_user
+    panos
+    pbm
+    pcs
     pecl
+    pdbedit
     pip_state
     pkg
     pkgbuild
@@ -126,14 +253,21 @@ Full list of builtin state modules
     pkgrepo
     portage_config
     ports
+    postgres_cluster
     postgres_database
+    postgres_default_privileges
     postgres_extension
     postgres_group
+    postgres_initdb
+    postgres_language
+    postgres_privileges
     postgres_schema
     postgres_tablespace
     postgres_user
     powerpath
+    probes
     process
+    proxy
     pushover
     pyenv
     pyrax_queues
@@ -143,19 +277,27 @@ Full list of builtin state modules
     rabbitmq_policy
     rabbitmq_user
     rabbitmq_vhost
+    rbac_solaris
     rbenv
     rdp
     redismod
     reg
     rsync
     rvm
+    salt_proxy
     saltmod
+    saltsupport
+    saltutil
     schedule
     selinux
     serverdensity_device
     service
     slack
+    smartos
     smtp
+    snap
+    snapper
+    solrcloud
     splunk
     splunk_search
     sqlite3
@@ -163,7 +305,7 @@ Full list of builtin state modules
     ssh_known_hosts
     stateconf
     status
-    stormpath_account
+    statuspage
     supervisord
     svn
     sysctl
@@ -171,6 +313,7 @@ Full list of builtin state modules
     sysrc
     telemetry_alert
     test
+    testinframod
     timezone
     tls
     tomcat
@@ -178,21 +321,51 @@ Full list of builtin state modules
     tuned
     uptime
     user
+    vagrant
+    vault
     vbox_guest
     victorops
+    virt
     virtualenv_mod
+    webutil
+    win_certutil
     win_dacl
+    win_dism
     win_dns_client
     win_firewall
+    win_iis
+    win_lgpo
+    win_license
     win_network
     win_path
+    win_pki
     win_powercfg
     win_servermanager
+    win_smtp_server
+    win_snmp
     win_system
-    win_update
+    win_task
+    win_wua
+    win_wusa
     winrepo
+    wordpress
     x509
+    xml
     xmpp
+    zabbix_action
+    zabbix_host
+    zabbix_hostgroup
+    zabbix_mediatype
+    zabbix_template
+    zabbix_service
+    zabbix_user
+    zabbix_usergroup
+    zabbix_usermacro
+    zabbix_valuemap
     zcbuildout
     zenoss
     zk_concurrency
+    zfs
+    zone
+    zookeeper
+    zpool

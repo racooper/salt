@@ -8,15 +8,19 @@
     It's just a wrapper around json (or simplejson if available).
 '''
 
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 try:
-    import simplejson as json
+    import simplejson as _json
 except ImportError:
-    import json
+    import json as _json  # pylint: disable=blacklisted-import
 
-from salt.ext.six import string_types
+# Import Salt libs
+import salt.utils.json
 from salt.serializers import DeserializationError, SerializationError
+
+# Import 3rd-party libs
+from salt.ext import six
 
 __all__ = ['deserialize', 'serialize', 'available']
 
@@ -24,37 +28,38 @@ available = True
 
 
 def deserialize(stream_or_string, **options):
-    """
-    Deserialize any string of stream like object into a Python data structure.
+    '''
+    Deserialize any string or stream like object into a Python data structure.
 
     :param stream_or_string: stream or string to deserialize.
     :param options: options given to lower json/simplejson module.
-    """
+    '''
 
     try:
-        if not isinstance(stream_or_string, (bytes, string_types)):
-            return json.load(stream_or_string, **options)
+        if not isinstance(stream_or_string, (bytes, six.string_types)):
+            return salt.utils.json.load(
+                stream_or_string, _json_module=_json, **options)
 
         if isinstance(stream_or_string, bytes):
             stream_or_string = stream_or_string.decode('utf-8')
 
-        return json.loads(stream_or_string)
+        return salt.utils.json.loads(stream_or_string, _json_module=_json)
     except Exception as error:
         raise DeserializationError(error)
 
 
 def serialize(obj, **options):
-    """
+    '''
     Serialize Python data to JSON.
 
     :param obj: the data structure to serialize
     :param options: options given to lower json/simplejson module.
-    """
+    '''
 
     try:
         if 'fp' in options:
-            return json.dump(obj, **options)
+            return salt.utils.json.dump(obj, _json_module=_json, **options)
         else:
-            return json.dumps(obj, **options)
+            return salt.utils.json.dumps(obj, _json_module=_json, **options)
     except Exception as error:
         raise SerializationError(error)

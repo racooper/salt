@@ -13,14 +13,16 @@ Clusters can be set as either absent or present
           - name: 'main'
           - version: '9.3'
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals, print_function
 
 
 def __virtual__():
     '''
     Only load if the deb_postgres module is present
     '''
-    return 'postgres.cluster_exists' in __salt__
+    if 'postgres.cluster_exists' not in __salt__:
+        return (False, 'Unable to load postgres module.  Make sure `postgres.bins_dir` is set.')
+    return True
 
 
 def present(version,
@@ -28,7 +30,11 @@ def present(version,
             port=None,
             encoding=None,
             locale=None,
-            datadir=None):
+            datadir=None,
+            allow_group_access=None,
+            data_checksums=None,
+            wal_segsize=None
+            ):
     '''
     Ensure that the named cluster is present with the specified properties.
     For more information about all of these options see man pg_createcluster(1)
@@ -50,6 +56,15 @@ def present(version,
 
     datadir
         Where the cluster is stored
+
+    allow_group_access
+        Allows users in the same group as the cluster owner to read all cluster files created by initdb
+
+    data_checksums
+        Use checksums on data pages
+
+    wal_segsize
+        Set the WAL segment size, in megabytes
 
         .. versionadded:: 2015.XX
     '''
@@ -84,7 +99,10 @@ def present(version,
         port=port,
         locale=locale,
         encoding=encoding,
-        datadir=datadir)
+        datadir=datadir,
+        allow_group_access=allow_group_access,
+        data_checksums=data_checksums,
+        wal_segsize=wal_segsize)
     if cluster:
         msg = 'The cluster {0}/{1} has been created'
         ret['comment'] = msg.format(version, name)
@@ -121,7 +139,7 @@ def absent(version,
             msg = 'Cluster {0}/{1} is set to be removed'
             ret['comment'] = msg.format(version, name)
             return ret
-        if __salt__['postgres.cluster_remove'](version, name):
+        if __salt__['postgres.cluster_remove'](version, name, True):
             msg = 'Cluster {0}/{1} has been removed'
             ret['comment'] = msg.format(version, name)
             ret['changes'][name] = 'Absent'

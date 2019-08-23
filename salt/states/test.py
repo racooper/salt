@@ -3,8 +3,8 @@
 Test States
 ===========
 
-Provide test case states that enable easy testing of things to do with
- state calls, e.g. running, calling, logging, output filtering etc.
+Provide test case states that enable easy testing of things to do with state
+calls, e.g. running, calling, logging, output filtering etc.
 
 .. code-block:: yaml
 
@@ -43,16 +43,35 @@ Provide test case states that enable easy testing of things to do with
             - foo
         - integer:
             - bar
+
+You may also use these states for controlled failure in state definitions, for example if certain conditions in
+pillar or grains do not apply. The following state definition will fail with a message "OS not supported!" when
+`grains['os']` is neither Ubuntu nor CentOS:
+
+.. code-block:: jinja
+
+    {% if grains['os'] in ['Ubuntu', 'CentOS'] %}
+
+    # Your state definitions go here
+
+    {% else %}
+    failure:
+      test.fail_without_changes:
+        - name: "OS not supported!"
+        - failhard: True
+    {% endif %}
+
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import Python libs
-import logging
 import random
-from salt.state import _gen_tag
-from salt.exceptions import SaltInvocationError
 
-log = logging.getLogger(__name__)
+# Import Salt libs
+import salt.utils.data
+from salt.state import _gen_tag
+from salt.ext import six
+from salt.exceptions import SaltInvocationError
 
 
 def nop(name, **kwargs):
@@ -61,12 +80,12 @@ def nop(name, **kwargs):
     requisite, or in templates which could otherwise be empty due to jinja
     rendering
 
-    .. versionadded:: 2015.5.6
+    .. versionadded:: 2015.8.1
     '''
     return succeed_without_changes(name)
 
 
-def succeed_without_changes(name):
+def succeed_without_changes(name, **kwargs):  # pylint: disable=unused-argument
     '''
     Returns successful.
 
@@ -84,7 +103,7 @@ def succeed_without_changes(name):
     return ret
 
 
-def fail_without_changes(name):
+def fail_without_changes(name, **kwargs):  # pylint: disable=unused-argument
     '''
     Returns failure.
 
@@ -107,7 +126,7 @@ def fail_without_changes(name):
     return ret
 
 
-def succeed_with_changes(name):
+def succeed_with_changes(name, **kwargs):  # pylint: disable=unused-argument
     '''
     Returns successful and changes is not empty
 
@@ -140,7 +159,7 @@ def succeed_with_changes(name):
     return ret
 
 
-def fail_with_changes(name):
+def fail_with_changes(name, **kwargs):  # pylint: disable=unused-argument
     '''
     Returns failure and changes is not empty.
 
@@ -189,6 +208,8 @@ def configurable_test_state(name, changes=True, result=True, comment=''):
         Do we return successfully or not?
         Accepts True, False, and 'Random'
         Default is True
+        If test is True and changes is True, this will be None.  If test is
+        True and and changes is False, this will be True.
     comment:
         String to fill the comment field with.
         Default is ''
@@ -199,33 +220,29 @@ def configurable_test_state(name, changes=True, result=True, comment=''):
         'result': False,
         'comment': comment
     }
+    change_data = {
+        'testing': {
+            'old': 'Unchanged',
+            'new': 'Something pretended to change'
+        }
+    }
 
     if changes == 'Random':
         if random.choice([True, False]):
             # Following the docs as written here
             # http://docs.saltstack.com/ref/states/writing.html#return-data
-            ret['changes'] = {
-                'testing': {
-                    'old': 'Unchanged',
-                    'new': 'Something pretended to change'
-                }
-            }
+            ret['changes'] = change_data
     elif changes is True:
         # If changes is True we place our dummy change dictionary into it.
         # Following the docs as written here
         # http://docs.saltstack.com/ref/states/writing.html#return-data
-        ret['changes'] = {
-            'testing': {
-                'old': 'Unchanged',
-                'new': 'Something pretended to change'
-            }
-        }
+        ret['changes'] = change_data
     elif changes is False:
         ret['changes'] = {}
     else:
         err = ('You have specified the state option \'Changes\' with'
-            ' invalid arguments. It must be either '
-            ' \'True\', \'False\', or \'Random\'')
+               ' invalid arguments. It must be either '
+               ' \'True\', \'False\', or \'Random\'')
         raise SaltInvocationError(err)
 
     if result == 'Random':
@@ -242,8 +259,8 @@ def configurable_test_state(name, changes=True, result=True, comment=''):
                                   '\'Random\'')
 
     if __opts__['test']:
-        ret['result'] = None
-        ret['comment'] = 'This is a test'
+        ret['result'] = True if changes is False else None
+        ret['comment'] = 'This is a test' if not comment else comment
 
     return ret
 
@@ -304,10 +321,11 @@ def mod_watch(name, sfun=None, **kwargs):
               - test: this_state_will_NOT_return_changes
     '''
     has_changes = []
-    for req in __low__['__reqs__']['watch']:
-        tag = _gen_tag(req)
-        if __running__[tag]['changes']:
-            has_changes.append('{state}: {__id__}'.format(**req))
+    if '__reqs__' in __low__:
+        for req in __low__['__reqs__']['watch']:
+            tag = _gen_tag(req)
+            if __running__[tag]['changes']:
+                has_changes.append('{state}: {__id__}'.format(**req))
 
     ret = {
         'name': name,
@@ -334,7 +352,7 @@ def _check_key_type(key_str, key_type=None):
     value = __salt__['pillar.get'](key_str, None)
     if value is None:
         return None
-    elif type(value) is not key_type:
+    elif key_type is not None and not isinstance(value, key_type):
         return False
     else:
         return True
@@ -346,11 +364,11 @@ def _if_str_then_list(listing):
     A str will be turned into a list with the
     str as its only element.
     '''
-    if type(listing) is str:
-        return [listing]
-    elif type(listing) is not list:
+    if isinstance(listing, six.string_types):
+        return [salt.utils.stringutils.to_unicode(listing)]
+    elif not isinstance(listing, list):
         raise TypeError
-    return listing
+    return salt.utils.data.decode_list(listing)
 
 
 def check_pillar(name,
@@ -415,7 +433,7 @@ def check_pillar(name,
     checks[int] = integer
     # those should be str:
     string = _if_str_then_list(string)
-    checks[str] = string
+    checks[six.string_types] = string
     # those should be list:
     listing = _if_str_then_list(listing)
     checks[list] = listing

@@ -94,6 +94,8 @@ Set up an initial profile at ``/etc/salt/cloud.profiles``:
       private_vlan: 396
       private_network: True
       private_ssh: True
+      # Use a dedicated host instead of cloud
+      dedicated_host_id: 1234
       # May be used _instead_of_ image
       global_identifier: 320d8be5-46c0-dead-cafe-13e3c51
 
@@ -192,7 +194,7 @@ Name) which is a result of combining the ``domain`` configuration value and the
 Minion name specified either via the CLI or a map file rather than only using the
 short host name, or Minion ID. Default is False.
 
-.. versionadded:: Boron
+.. versionadded:: 2016.3.0
 
 For example, if the value of ``domain`` is ``example.com`` and a new VM was created
 via the CLI with ``salt-cloud -p base_softlayer_ubuntu my-vm``, the resulting
@@ -208,6 +210,7 @@ Minion ID would be ``my-vm.example.com``.
 Example output displaying the SoftLayer hostname quirk mentioned in the note above
 (note the Minion ID is ``my-vm.example.com``, but the VM to be destroyed is listed
 with its short hostname, ``my-vm``):
+
 .. code-block:: bash
 
     # salt-key -L
@@ -218,9 +221,9 @@ with its short hostname, ``my-vm``):
     Rejected Keys:
     #
     #
-    # salt my-vm.example.com test.ping
+    # salt my-vm.example.com test.version
     my-vm.example.com:
-        True
+        2018.3.4
     #
     #
     # salt-cloud -d my-vm.example.com
@@ -242,6 +245,7 @@ with its short hostname, ``my-vm``):
             ----------
             my-vm:
                 True
+
 
 location
 --------
@@ -278,6 +282,15 @@ configuration.
 This ID can be queried using the `list_vlans` function, as described below. This
 setting is optional.
 
+If this setting is set to `None`, salt-cloud will connect to the private ip of
+the server.
+
+.. note::
+
+    If this setting is not provided and the server is not built with a public
+    vlan, `private_ssh` or `private_wds` will need to be set to make sure that
+    salt-cloud attempts to connect to the private ip.
+
 private_vlan
 ------------
 If it is necessary for an instance to be created within a specific backend VLAN,
@@ -293,12 +306,12 @@ If a server is to only be used internally, meaning it does not have a public
 VLAN associated with it, this value would be set to True. This setting is
 optional. The default is False.
 
-private_ssh
------------
+private_ssh or private_wds
+--------------------------
 Whether to run the deploy script on the server using the public IP address
-or the private IP address. If set to True, Salt Cloud will attempt to SSH into
-the new server using the private IP address. The default is False. This
-settiong is optional.
+or the private IP address. If set to True, Salt Cloud will attempt to SSH or
+WinRM into the new server using the private IP address. The default is False.
+This settiong is optional.
 
 global_identifier
 -----------------
@@ -321,11 +334,23 @@ it can be verified with Salt:
 
 .. code-block:: bash
 
-    # salt 'myserver.example.com' test.ping
+    # salt 'myserver.example.com' test.version
 
-
-Cloud Profiles
+Dedicated Host
 ~~~~~~~~~~~~~~
+Soflayer allows the creation of new VMs in a dedicated host. This means that
+you can order and pay a fixed amount for a bare metal dedicated host and use
+it to provision as many VMs as you can fit in there. If you want your VMs to
+be launched in a dedicated host, instead of Sofltayer's cloud, set the
+``dedicated_host_id`` parameter in your profile.
+
+dedicated_host_id
+-----------------
+The id of the dedicated host where the VMs should be created. If not set, VMs
+will be created in Softlayer's cloud instead.
+
+Bare metal Profiles
+~~~~~~~~~~~~~~~~~~~
 Set up an initial profile at ``/etc/salt/cloud.profiles``:
 
 .. code-block:: yaml
@@ -336,8 +361,8 @@ Set up an initial profile at ``/etc/salt/cloud.profiles``:
       image: 13963
       # 2 x 2.0 GHz Core Bare Metal Instance - 2 GB Ram
       size: 1921
-      # 250GB SATA II
-      hdd: 19
+      # 500GB SATA II
+      hdd: 1267
       # San Jose 01
       location: 168642
       domain: example.com
@@ -376,15 +401,14 @@ contain. The `id` will be the setting to be used in the profile.
 
 hdd
 ---
-There are currently two sizes of hard disk drive (HDD) that are available for
+There is currently only one size of hard disk drive (HDD) that is available for
 hardware instances on SoftLayer:
 
 .. code-block:: yaml
 
-    19: 250GB SATA II
     1267: 500GB SATA II
 
-The `hdd` setting in the profile will be either 19 or 1267. Other sizes may be
+The `hdd` setting in the profile should be 1267. Other sizes may be
 added in the future.
 
 location
@@ -502,8 +526,8 @@ them, that can be passed into Salt Cloud with the `optional_products` option:
       image: 13963
       # 2 x 2.0 GHz Core Bare Metal Instance - 2 GB Ram
       size: 1921
-      # 250GB SATA II
-      hdd: 19
+      # 500GB SATA II
+      hdd: 1267
       # San Jose 01
       location: 168642
       domain: example.com

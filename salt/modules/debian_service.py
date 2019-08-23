@@ -1,12 +1,19 @@
 # -*- coding: utf-8 -*-
 '''
 Service support for Debian systems (uses update-rc.d and /sbin/service)
+
+.. important::
+    If you feel that Salt should be using this module to manage services on a
+    minion, and it is using a different module (or gives an error similar to
+    *'service.start' is not available*), see :ref:`here
+    <module-provider-override>`.
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import python libs
 import logging
 import glob
+import fnmatch
 import re
 
 # Import 3rd-party libs
@@ -34,9 +41,11 @@ def __virtual__():
     '''
     Only work on Debian and when systemd isn't running
     '''
-    if __grains__['os'] in ('Debian', 'Raspbian', 'Devuan') and not salt.utils.systemd.booted(__context__):
+    if __grains__.get('os') in ('Debian', 'Raspbian', 'Devuan', 'NILinuxRT') and not salt.utils.systemd.booted(__context__):
         return __virtualname__
-    return False
+    else:
+        return (False, 'The debian_service module could not be loaded: '
+                'unsupported OS family and/or systemd running.')
 
 
 def _service_cmd(*args):
@@ -216,19 +225,42 @@ def force_reload(name):
 
 def status(name, sig=None):
     '''
-    Return the status for a service, pass a signature to use to find
-    the service via ps
+    Return the status for a service.
+    If the name contains globbing, a dict mapping service name to True/False
+    values is returned.
+
+    .. versionchanged:: 2018.3.0
+        The service name can now be a glob (e.g. ``salt*``)
+
+    Args:
+        name (str): The name of the service to check
+        sig (str): Signature to use to find the service via ps
+
+    Returns:
+        bool: True if running, False otherwise
+        dict: Maps service name to True if running, False otherwise
 
     CLI Example:
 
     .. code-block:: bash
 
-        salt '*' service.status <service name>
+        salt '*' service.status <service name> [service signature]
     '''
     if sig:
         return bool(__salt__['status.pid'](sig))
-    cmd = _service_cmd(name, 'status')
-    return not __salt__['cmd.retcode'](cmd)
+
+    contains_globbing = bool(re.search(r'\*|\?|\[.+\]', name))
+    if contains_globbing:
+        services = fnmatch.filter(get_all(), name)
+    else:
+        services = [name]
+    results = {}
+    for service in services:
+        cmd = _service_cmd(service, 'status')
+        results[service] = not __salt__['cmd.retcode'](cmd, ignore_retcode=True)
+    if contains_globbing:
+        return results
+    return results[name]
 
 
 def _osrel():
@@ -257,7 +289,8 @@ def enable(name, **kwargs):
         if int(osmajor) >= 6:
             cmd = 'insserv {0} && '.format(_cmd_quote(name)) + cmd
     except ValueError:
-        if osmajor == 'testing/unstable' or osmajor == 'unstable':
+        osrel = _osrel()
+        if osrel == 'testing/unstable' or osrel == 'unstable' or osrel.endswith("/sid"):
             cmd = 'insserv {0} && '.format(_cmd_quote(name)) + cmd
     return not __salt__['cmd.retcode'](cmd, python_shell=True)
 

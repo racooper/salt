@@ -17,28 +17,30 @@ Example output::
           - Hello
           - World
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import third party libs
-import yaml
+import logging
 
 # Import salt libs
-from salt.utils.yamldumper import OrderedDumper
+import salt.utils.yaml
 
 # Define the module's virtual name
 __virtualname__ = 'yaml'
+
+log = logging.getLogger(__name__)
 
 
 def __virtual__():
     return __virtualname__
 
 
-def output(data):
+def output(data, **kwargs):  # pylint: disable=unused-argument
     '''
     Print out YAML using the block mode
     '''
 
-    params = dict(Dumper=OrderedDumper)
+    params = {}
     if 'output_indent' not in __opts__:
         # default indentation
         params.update(default_flow_style=False)
@@ -49,4 +51,11 @@ def output(data):
     else:  # no indentation
         params.update(default_flow_style=True,
                       indent=0)
-    return yaml.dump(data, **params)
+    try:
+        return salt.utils.yaml.safe_dump(data, **params)
+    except Exception as exc:
+        import pprint
+        log.exception(
+            'Exception %s encountered when trying to serialize %s',
+            exc, pprint.pformat(data)
+        )

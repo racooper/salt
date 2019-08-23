@@ -1,3 +1,5 @@
+.. _proxy-minion-end-to-end-example:
+
 ====================================
 Salt Proxy Minion End-to-End Example
 ====================================
@@ -56,18 +58,16 @@ Now, configure your salt-proxy.
 
 
 This says that Salt's pillar should load some values for the proxy ``p8000``
-from the file /srv/pillar/p8000.sls (if you have not changed your default pillar_roots)
+from the file ``/srv/pillar/p8000.sls`` (if you have not changed your default pillar_roots)
 
-3. In the pillar root for your base environment, create this file:
+3. In the pillar root for your base environment, create the ``p8000.sls`` file with the
+   following contents:
 
 
 .. code-block:: yaml
 
-   p8000.sls
-   ---------
-
    proxy:
-     proxymodule: rest_sample
+     proxytype: rest_sample
      url: http://<IP your REST listens on>:port
 
 In other words, if your REST service is listening on port 8000 on 127.0.0.1
@@ -82,9 +82,9 @@ the 'url' key above should say ``url: http://127.0.0.1:8000``
    salt-proxy --proxyid=p8000 -l debug
 
 6. Accept your proxy's key on your salt-master
-   
+
 .. code-block:: bash
-   
+
    salt-key -y -a p8000
    The following keys are going to be accepted:
    Unaccepted Keys:
@@ -96,7 +96,7 @@ the 'url' key above should say ``url: http://127.0.0.1:8000``
 
 .. code-block:: bash
 
-    salt p8000 test.ping
+    salt p8000 test.version
 
 8. The REST service implements a degenerately simple pkg and service provider as
    well as a small set of grains.  To "install" a package, use a standard
@@ -108,8 +108,8 @@ the 'url' key above should say ``url: http://127.0.0.1:8000``
    can target proxies via grains if you like.
 
 10. You can also start and stop the available services (apache, redbull, and
-    postgresql with ``service.start``, etc.  
-    
+    postgresql with ``service.start``, etc.
+
 11. States can be written to target the proxy.  Feel free to experiment with
     them.
-    
+

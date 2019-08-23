@@ -5,11 +5,11 @@ This module allows SPM to use sqlite3 as the backend for SPM's package database.
 .. versionadded:: 2015.8.0
 '''
 
-from __future__ import absolute_import
-import os.path
-import logging
-import sqlite3
+from __future__ import absolute_import, print_function, unicode_literals
 import datetime
+import logging
+import os
+import sqlite3
 from sqlite3 import OperationalError
 from salt.ext.six.moves import zip
 
@@ -22,11 +22,11 @@ def init():
     Get an sqlite3 connection, and initialize the package database if necessary
     '''
     if not os.path.exists(__opts__['spm_cache_dir']):
-        log.debug('Creating SPM cache directory at {0}'.format(__opts__['spm_db']))
+        log.debug('Creating SPM cache directory at %s', __opts__['spm_db'])
         os.makedirs(__opts__['spm_cache_dir'])
 
     if not os.path.exists(__opts__['spm_db']):
-        log.debug('Creating new package database at {0}'.format(__opts__['spm_db']))
+        log.debug('Creating new package database at %s', __opts__['spm_db'])
 
     sqlite3.enable_callback_tracebacks(True)
     conn = sqlite3.connect(__opts__['spm_db'], isolation_level=None)
@@ -73,7 +73,9 @@ def info(package, conn=None):
     '''
     List info for a package
     '''
+    close = False
     if conn is None:
+        close = True
         conn = init()
 
     fields = (
@@ -94,6 +96,8 @@ def info(package, conn=None):
         (package, )
     )
     row = data.fetchone()
+    if close:
+        conn.close()
     if not row:
         return None
 
@@ -103,21 +107,46 @@ def info(package, conn=None):
     return formula_def
 
 
+def list_packages(conn=None):
+    '''
+    List files for an installed package
+    '''
+    close = False
+    if conn is None:
+        close = True
+        conn = init()
+
+    ret = []
+    data = conn.execute('SELECT package FROM packages')
+    for pkg in data.fetchall():
+        ret.append(pkg)
+
+    if close:
+        conn.close()
+    return ret
+
+
 def list_files(package, conn=None):
     '''
     List files for an installed package
     '''
+    close = False
     if conn is None:
+        close = True
         conn = init()
 
     data = conn.execute('SELECT package FROM packages WHERE package=?', (package, ))
     if not data.fetchone():
+        if close:
+            conn.close()
         return None
 
     ret = []
     data = conn.execute('SELECT path, sum FROM files WHERE package=?', (package, ))
     for file_ in data.fetchall():
         ret.append(file_)
+    if close:
+        conn.close()
 
     return ret
 
@@ -126,7 +155,9 @@ def register_pkg(name, formula_def, conn=None):
     '''
     Register a package in the package database
     '''
+    close = False
     if conn is None:
+        close = True
         conn = init()
 
     conn.execute('INSERT INTO packages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (
@@ -142,13 +173,17 @@ def register_pkg(name, formula_def, conn=None):
         formula_def['summary'],
         formula_def['description'],
     ))
+    if close:
+        conn.close()
 
 
 def register_file(name, member, path, digest='', conn=None):
     '''
     Register a file in the package database
     '''
+    close = False
     if conn is None:
+        close = True
         conn = init()
 
     conn.execute('INSERT INTO files VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (
@@ -165,6 +200,8 @@ def register_file(name, member, path, digest='', conn=None):
         member.gname,
         member.mtime
     ))
+    if close:
+        conn.close()
 
 
 def unregister_pkg(name, conn=None):
@@ -181,10 +218,14 @@ def unregister_file(path, pkg=None, conn=None):  # pylint: disable=W0612
     '''
     Unregister a file from the package database
     '''
+    close = False
     if conn is None:
+        close = True
         conn = init()
 
     conn.execute('DELETE FROM files WHERE path=?', (path, ))
+    if close:
+        conn.close()
 
 
 def db_exists(db_):

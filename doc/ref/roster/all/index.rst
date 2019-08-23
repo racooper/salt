@@ -1,8 +1,8 @@
 .. _all-salt.roster:
 
-===================================
-Full list of builtin roster modules
-===================================
+==============
+roster modules
+==============
 
 .. currentmodule:: salt.roster
 
@@ -14,5 +14,10 @@ Full list of builtin roster modules
     cache
     cloud
     clustershell
+    dir
     flat
+    range
     scan
+    sshconfig
+    terraform
+    sshknownhosts

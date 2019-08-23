@@ -39,7 +39,7 @@ the API key will be updated on all the YubiCloud servers.
 '''
 
 # Import Python Libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 from __future__ import print_function
 import logging
 
@@ -71,20 +71,21 @@ def __get_yubico_users(username):
 
 def auth(username, password):
     '''
-    Authentcate against yubico server
+    Authenticate against yubico server
     '''
     _cred = __get_yubico_users(username)
 
     client = Yubico(_cred['id'], _cred['key'])
 
     try:
-        if client.verify(password):
-            return True
-        else:
-            return False
+        return client.verify(password)
     except yubico_exceptions.StatusCodeError as e:
-        log.info('Unable to verify YubiKey `{0}`'.format(e))
+        log.info('Unable to verify YubiKey `%s`', e)
         return False
+
+
+def groups(username, *args, **kwargs):
+    return False
 
 
 if __name__ == '__main__':

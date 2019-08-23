@@ -21,7 +21,7 @@ requires very little. In the example:
     myetcd:
       driver: etcd
       etcd.host: 127.0.0.1
-      etcd.port: 4001
+      etcd.port: 2379
 
 The ``driver`` refers to the etcd module, ``etcd.host`` refers to the host that
 is hosting the etcd database and ``etcd.port`` refers to the port on that host.
@@ -33,7 +33,7 @@ is hosting the etcd database and ``etcd.port`` refers to the port on that host.
 '''
 
 # import python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 import logging
 
 try:
@@ -76,6 +76,18 @@ def get(key, service=None, profile=None):  # pylint: disable=W0613
     client = _get_conn(profile)
     result = client.get(key)
     return result.value
+
+
+def delete(key, service=None, profile=None):  # pylint: disable=W0613
+    '''
+    Get a value from the etcd service
+    '''
+    client = _get_conn(profile)
+    try:
+        client.delete(key)
+        return True
+    except Exception:
+        return False
 
 
 def _get_conn(profile):

@@ -2,7 +2,7 @@
 '''
 Library for interacting with Slack API
 
-.. versionadded:: Boron
+.. versionadded:: 2016.3.0
 
 :configuration: This module can be used by specifying the name of a
     configuration profile in the minion config, minion pillar, or master
@@ -15,7 +15,7 @@ Library for interacting with Slack API
         slack:
           api_key: peWcBiMOS9HrZG15peWcBiMOS9HrZG15
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 import logging
 # Import 3rd-party libs
@@ -45,7 +45,6 @@ def query(function,
     :param data:        The data to be sent for POST method.
     :return:            The json response from the API call or False.
     '''
-    query_params = {}
 
     ret = {'message': '',
            'res': True}
@@ -82,6 +81,8 @@ def query(function,
 
     if not isinstance(args, dict):
         query_params = {}
+    else:
+        query_params = args.copy()
     query_params['token'] = api_key
 
     if header_dict is None:
@@ -117,10 +118,14 @@ def query(function,
         log.debug(query_params)
         log.debug(data)
         log.debug(result)
-        _result = result['dict']
-        if 'error' in _result:
-            ret['message'] = result['error']
+        if 'dict' in result:
+            _result = result['dict']
+            if 'error' in _result:
+                ret['message'] = result['error']
+                ret['res'] = False
+                return ret
+            ret['message'] = _result.get(response)
+        else:
+            ret['message'] = 'invalid_auth'
             ret['res'] = False
-            return ret
-        ret['message'] = _result.get(response)
         return ret

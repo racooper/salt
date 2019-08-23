@@ -9,6 +9,10 @@ prefix or in `sysexits.h`).
 # else is more appropriate.
 EX_GENERIC = 1
 
+EX_STATE_COMPILER_ERROR = 1
+EX_STATE_FAILURE = 2
+EX_PILLAR_FAILURE = 5
+
 # Salt SSH "Thin" deployment failures
 EX_THIN_PYTHON_INVALID = 10
 EX_THIN_DEPLOY = 11
@@ -25,12 +29,14 @@ EX_AGGREGATE = 20
 # These constants are documented here:
 # https://docs.python.org/2/library/os.html#os.EX_OK
 
-EX_OK = 0
-EX_NOUSER = 67
-EX_UNAVAILABLE = 69
-EX_CANTCREAT = 73
-EX_SOFTWARE = 70
-EX_USAGE = 64
+EX_OK = 0                 # successful termination
+EX_USAGE = 64             # command line usage error
+EX_NOUSER = 67            # addressee unknown
+EX_UNAVAILABLE = 69       # service unavailable
+EX_SOFTWARE = 70          # internal software error
+EX_CANTCREAT = 73         # can't create (user) output file
+EX_TEMPFAIL = 75          # temp failure; user is invited to retry
+EX_NOPERM = 77            # permission denied
 
 # The Salt specific exit codes are defined below:
 

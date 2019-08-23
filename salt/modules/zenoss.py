@@ -2,12 +2,16 @@
 '''
 Module for working with the Zenoss API
 
-.. versionadded:: Boron
+.. versionadded:: 2016.3.0
+
+:depends: requests
 
 :configuration: This module requires a 'zenoss' entry in the master/minion config.
 
     For example:
+
     .. code-block:: yaml
+
         zenoss:
           hostname: https://zenoss.example.com
           username: admin
@@ -15,9 +19,8 @@ Module for working with the Zenoss API
 '''
 
 
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 import re
-import json
 import logging
 
 try:
@@ -26,6 +29,7 @@ try:
 except ImportError:
     HAS_LIBS = False
 
+import salt.utils.json
 
 # Disable INFO level logs from requests/urllib3
 urllib3_logger = logging.getLogger('urllib3')
@@ -34,13 +38,19 @@ urllib3_logger.setLevel(logging.WARNING)
 
 log = logging.getLogger(__name__)
 
+__virtualname__ = 'zenoss'
+
 
 def __virtual__():
     '''
     Only load if requests is installed
     '''
     if HAS_LIBS:
-        return 'zenoss'
+        return __virtualname__
+    else:
+        return False, 'The \'{0}\' module could not be loaded: ' \
+                      '\'requests\' is not installed.'.format(__virtualname__)
+
 
 ROUTERS = {'MessagingRouter': 'messaging',
            'EventsRouter': 'evconsole',
@@ -75,7 +85,7 @@ def _router_request(router, method, data=None):
     if router not in ROUTERS:
         return False
 
-    req_data = json.dumps([dict(
+    req_data = salt.utils.json.dumps([dict(
         action=router,
         method=method,
         data=data,
@@ -94,7 +104,7 @@ def _router_request(router, method, data=None):
         log.error('Request failed. Bad username/password.')
         raise Exception('Request failed. Bad username/password.')
 
-    return json.loads(response.content).get('result', None)
+    return salt.utils.json.loads(response.content).get('result', None)
 
 
 def _determine_device_class():
@@ -148,7 +158,7 @@ def device_exists(device=None):
     return False
 
 
-def add_device(device=None, device_class=None, collector='localhost', prod_state=None):
+def add_device(device=None, device_class=None, collector='localhost', prod_state=1000):
     '''
     A function to connect to a zenoss server and add a new device entry.
 
@@ -176,8 +186,6 @@ def add_device(device=None, device_class=None, collector='localhost', prod_state
 def set_prod_state(prod_state, device=None):
     '''
     A function to set the prod_state in zenoss.
-
-    versionadded:: Boron
 
     Parameters:
         prod_state:     (Required) Integer value of the state

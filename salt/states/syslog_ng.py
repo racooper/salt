@@ -22,7 +22,7 @@ If the service module is available on the computers, users should use that.
 
 Users can generate syslog-ng configuration with
 :mod:`syslog_ng.config <salt.states.syslog_ng.config>` function.
-For more information see :doc:`syslog-ng state usage </topics/tutorials/syslog_ng-state-usage>`.
+For more information see :ref:`syslog-ng state usage <syslog-ng-sate-usage>`.
 
 Syslog-ng configuration file format
 -----------------------------------
@@ -44,9 +44,8 @@ You can find more information about syslog-ng's configuration syntax in the
 Syslog-ng Admin guide:
 http://www.balabit.com/sites/default/files/documents/syslog-ng-ose-3.5-guides/en/syslog-ng-ose-v3.5-guide-admin/html-single/index.html#syslog-ng.conf.5
 '''
-
-from __future__ import generators, print_function, with_statement
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals, print_function, \
+    generators, with_statement
 import logging
 
 

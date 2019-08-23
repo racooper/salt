@@ -1,8 +1,8 @@
-.. _spm_development:
+.. _spm-development:
 
-======================
-SPM Developmnent Guide
-======================
+=====================
+SPM Development Guide
+=====================
 This document discusses developing additional code for SPM.
 
 
@@ -20,6 +20,7 @@ marked as required are crucial to SPM's core functionality, while arguments that
 are marked as optional are provided as a benefit to the module, if it needs to
 use them.
 
+.. _spm-development-pkgdb:
 
 Package Database
 ----------------
@@ -27,7 +28,7 @@ By default, the package database is stored using the ``sqlite3`` module. This
 module was chosen because support for SQLite3 is built into Python itself.
 
 Modules for managing the package database are stored in the ``salt/spm/pkgdb/``
-directory. A number of functions must exist to support database managment.
+directory. A number of functions must exist to support database management.
 
 
 init()
@@ -132,7 +133,7 @@ The arguments that are passed in, in order, are ``name`` (required), ``pkg``
 
 ``name`` is the path of the file, as it was installed on the filesystem.
 
-``pkg`` is the name of the package that the file belongs to. 
+``pkg`` is the name of the package that the file belongs to.
 
 ``conn`` is the connection object returned from ``init()``.
 
@@ -146,6 +147,8 @@ The only argument that is expected is ``db_``, which is the package database
 file.
 
 
+.. _spm-development-pkgfiles:
+
 Package Files
 -------------
 By default, package files are installed using the ``local`` module. This module
@@ -154,7 +157,7 @@ installed on.
 
 Modules for managing the package database are stored in the
 ``salt/spm/pkgfiles/`` directory. A number of functions must exist to support
-file managment.
+file management.
 
 init()
 ``````
@@ -256,7 +259,7 @@ This function will not generally be more complex than:
 .. code-block:: python
 
     def hash_file(path, hashobj, conn=None):
-        with salt.utils.fopen(path, 'r') as f:
+        with salt.utils.files.fopen(path, 'r') as f:
             hashobj.update(f.read())
             return hashobj.hexdigest()
 

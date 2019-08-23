@@ -2,51 +2,162 @@
 '''
 Support for Opkg
 
-.. versionadded: Boron
+.. important::
+    If you feel that Salt should be using this module to manage packages on a
+    minion, and it is using a different module (or gives an error similar to
+    *'pkg.install' is not available*), see :ref:`here
+    <module-provider-override>`.
+
+.. versionadded: 2016.3.0
 
 .. note::
 
-    For version comparision support, the ``opkg-utils`` package must be
-    installed.
+    For version comparison support on opkg < 0.3.4, the ``opkg-utils`` package
+    must be installed.
 
 '''
-from __future__ import absolute_import
-
 # Import python libs
+from __future__ import absolute_import, print_function, unicode_literals
 import copy
 import os
 import re
 import logging
-from salt.ext import six
-try:
-    from shlex import quote as _cmd_quote  # pylint: disable=E0611
-except ImportError:
-    from pipes import quote as _cmd_quote
+import errno
 
 # Import salt libs
-import salt.utils
-from salt.utils.decorators import which as _which
-
+import salt.utils.args
+import salt.utils.data
+import salt.utils.files
+import salt.utils.itertools
+import salt.utils.path
+import salt.utils.pkg
+import salt.utils.stringutils
+import salt.utils.versions
 from salt.exceptions import (
     CommandExecutionError, MinionError, SaltInvocationError
 )
+# Import 3rd-party libs
+from salt.ext import six
+from salt.ext.six.moves import shlex_quote as _cmd_quote  # pylint: disable=import-error
+from salt.ext.six.moves import map  # pylint: disable=import-error,redefined-builtin
 
-REPO_REGEXP = r'^#?\s*(src|src/gz)\s+[^\s<>]+\s+[^\s<>]+'
+REPO_REGEXP = r'^#?\s*(src|src/gz)\s+([^\s<>]+|"[^<>]+")\s+[^\s<>]+'
 OPKG_CONFDIR = '/etc/opkg'
+ATTR_MAP = {
+    'Architecture': 'arch',
+    'Homepage': 'url',
+    'Installed-Time': 'install_date_time_t',
+    'Maintainer': 'packager',
+    'Package': 'name',
+    'Section': 'group'
+}
 
 log = logging.getLogger(__name__)
 
 # Define the module's virtual name
 __virtualname__ = 'pkg'
 
+NILRT_RESTARTCHECK_STATE_PATH = '/var/lib/salt/restartcheck_state'
+
+
+def _update_nilrt_restart_state():
+    '''
+    NILRT systems determine whether to reboot after various package operations
+    including but not limited to kernel module installs/removals by checking
+    specific file md5sums & timestamps. These files are touched/modified by
+    the post-install/post-remove functions of their respective packages.
+
+    The opkg module uses this function to store/update those file timestamps
+    and checksums to be used later by the restartcheck module.
+
+    '''
+    __salt__['cmd.shell']('stat -c %Y /lib/modules/$(uname -r)/modules.dep >{0}/modules.dep.timestamp'
+                          .format(NILRT_RESTARTCHECK_STATE_PATH))
+    __salt__['cmd.shell']('md5sum /lib/modules/$(uname -r)/modules.dep >{0}/modules.dep.md5sum'
+                          .format(NILRT_RESTARTCHECK_STATE_PATH))
+
+    # We can't assume nisysapi.ini always exists like modules.dep
+    nisysapi_path = '/usr/local/natinst/share/nisysapi.ini'
+    if os.path.exists(nisysapi_path):
+        __salt__['cmd.shell']('stat -c %Y {0} >{1}/nisysapi.ini.timestamp'
+                              .format(nisysapi_path, NILRT_RESTARTCHECK_STATE_PATH))
+        __salt__['cmd.shell']('md5sum {0} >{1}/nisysapi.ini.md5sum'
+                              .format(nisysapi_path, NILRT_RESTARTCHECK_STATE_PATH))
+
+    # Expert plugin files get added to a conf.d dir, so keep track of the total
+    # no. of files, their timestamps and content hashes
+    nisysapi_conf_d_path = "/usr/lib/{0}/nisysapi/conf.d/experts/".format(
+        'arm-linux-gnueabi' if 'arm' in __grains__.get('cpuarch') else 'x86_64-linux-gnu'
+    )
+
+    if os.path.exists(nisysapi_conf_d_path):
+        with salt.utils.files.fopen('{0}/sysapi.conf.d.count'.format(
+                NILRT_RESTARTCHECK_STATE_PATH), 'w') as fcount:
+            fcount.write(str(len(os.listdir(nisysapi_conf_d_path))))
+
+        for fexpert in os.listdir(nisysapi_conf_d_path):
+            __salt__['cmd.shell']('stat -c %Y {0}/{1} >{2}/{1}.timestamp'
+                                  .format(nisysapi_conf_d_path,
+                                          fexpert,
+                                          NILRT_RESTARTCHECK_STATE_PATH))
+            __salt__['cmd.shell']('md5sum {0}/{1} >{2}/{1}.md5sum'
+                                  .format(nisysapi_conf_d_path,
+                                          fexpert,
+                                          NILRT_RESTARTCHECK_STATE_PATH))
+
+
+def _get_restartcheck_result(errors):
+    '''
+    Return restartcheck result and append errors (if any) to ``errors``
+    '''
+    rs_result = __salt__['restartcheck.restartcheck'](verbose=False)
+    if isinstance(rs_result, dict) and 'comment' in rs_result:
+        errors.append(rs_result['comment'])
+    return rs_result
+
+
+def _process_restartcheck_result(rs_result, **kwargs):
+    '''
+    Check restartcheck output to see if system/service restarts were requested
+    and take appropriate action.
+    '''
+    if 'No packages seem to need to be restarted' in rs_result:
+        return
+    reboot_required = False
+    for rstr in rs_result:
+        if 'System restart required' in rstr:
+            _update_nilrt_restart_state()
+            __salt__['system.set_reboot_required_witnessed']()
+            reboot_required = True
+    if kwargs.get('always_restart_services', True) or not reboot_required:
+        for rstr in rs_result:
+            if 'System restart required' not in rstr:
+                service = os.path.join('/etc/init.d', rstr)
+                if os.path.exists(service):
+                    __salt__['cmd.run']([service, 'restart'])
+
 
 def __virtual__():
     '''
     Confirm this module is on a nilrt based system
     '''
-    if __grains__.get('os_family', False) == 'NILinuxRT':
+    if __grains__.get('os_family') == 'NILinuxRT':
+        try:
+            os.makedirs(NILRT_RESTARTCHECK_STATE_PATH)
+        except OSError as exc:
+            if exc.errno != errno.EEXIST:
+                return False, 'Error creating {0} (-{1}): {2}'.format(
+                    NILRT_RESTARTCHECK_STATE_PATH,
+                    exc.errno,
+                    exc.strerror)
+        # populate state dir if empty
+        if not os.listdir(NILRT_RESTARTCHECK_STATE_PATH):
+            _update_nilrt_restart_state()
         return __virtualname__
-    return False
+
+    if os.path.isdir(OPKG_CONFDIR):
+        return __virtualname__
+    return False, "Module opkg only works on OpenEmbedded based systems"
 
 
 def latest_version(*names, **kwargs):
@@ -66,9 +177,9 @@ def latest_version(*names, **kwargs):
         salt '*' pkg.latest_version <package name>
         salt '*' pkg.latest_version <package1> <package2> <package3> ...
     '''
-    refresh = salt.utils.is_true(kwargs.pop('refresh', True))
+    refresh = salt.utils.data.is_true(kwargs.pop('refresh', True))
 
-    if len(names) == 0:
+    if not names:
         return ''
 
     ret = {}
@@ -80,8 +191,10 @@ def latest_version(*names, **kwargs):
         refresh_db()
 
     cmd = ['opkg', 'list-upgradable']
-    out = __salt__['cmd.run_stdout'](cmd, output_loglevel='trace')
-    for line in out.splitlines():
+    out = __salt__['cmd.run_stdout'](cmd,
+                                     output_loglevel='trace',
+                                     python_shell=False)
+    for line in salt.utils.itertools.split(out, '\n'):
         try:
             name, _oldversion, newversion = line.split(' - ')
             if name in names:
@@ -115,7 +228,7 @@ def version(*names, **kwargs):
     return __salt__['pkg_resource.version'](*names, **kwargs)
 
 
-def refresh_db():
+def refresh_db(failhard=False, **kwargs):  # pylint: disable=unused-argument
     '''
     Updates the opkg database to latest packages based upon repositories
 
@@ -125,43 +238,150 @@ def refresh_db():
     - ``True``: Database updated successfully
     - ``False``: Problem updating database
 
+    failhard
+        If False, return results of failed lines as ``False`` for the package
+        database that encountered the error.
+        If True, raise an error with a list of the package databases that
+        encountered errors.
+
+        .. versionadded:: 2018.3.0
+
     CLI Example:
 
     .. code-block:: bash
 
         salt '*' pkg.refresh_db
     '''
+    # Remove rtag file to keep multiple refreshes from happening in pkg states
+    salt.utils.pkg.clear_rtag(__opts__)
     ret = {}
+    error_repos = []
     cmd = ['opkg', 'update']
-    call = __salt__['cmd.run_all'](cmd, output_loglevel='trace')
+    # opkg returns a non-zero retcode when there is a failure to refresh
+    # from one or more repos. Due to this, ignore the retcode.
+    call = __salt__['cmd.run_all'](cmd,
+                                   output_loglevel='trace',
+                                   python_shell=False,
+                                   ignore_retcode=True,
+                                   redirect_stderr=True)
 
-    if call['retcode'] != 0:
-        comment = ''
-        if 'stderr' in call:
-            comment += call['stderr']
-
-        raise CommandExecutionError(
-            '{0}'.format(comment)
-        )
-    else:
-        out = call['stdout']
-
-    for line in out.splitlines():
+    out = call['stdout']
+    prev_line = ''
+    for line in salt.utils.itertools.split(out, '\n'):
         if 'Inflating' in line:
-            key = line.strip().split()[1].split('.')[0]
+            key = line.strip().split()[1][:-1]
+            ret[key] = True
+        elif 'Updated source' in line:
+            # Use the previous line.
+            key = prev_line.strip().split()[1][:-1]
             ret[key] = True
         elif 'Failed to download' in line:
             key = line.strip().split()[5].split(',')[0]
             ret[key] = False
+            error_repos.append(key)
+        prev_line = line
+
+    if failhard and error_repos:
+        raise CommandExecutionError(
+            'Error getting repos: {0}'.format(', '.join(error_repos))
+        )
+
+    # On a non-zero exit code where no failed repos were found, raise an
+    # exception because this appears to be a different kind of error.
+    if call['retcode'] != 0 and not error_repos:
+        raise CommandExecutionError(out)
+
     return ret
 
 
-# TODO: opkg doesn't support installation of a specific version of a package
-#       (opkg issue 176). Once fixed, this function should add support.
+def _is_testmode(**kwargs):
+    '''
+    Returns whether a test mode (noaction) operation was requested.
+    '''
+    return bool(kwargs.get('test') or __opts__.get('test'))
+
+
+def _append_noaction_if_testmode(cmd, **kwargs):
+    '''
+    Adds the --noaction flag to the command if it's running in the test mode.
+    '''
+    if _is_testmode(**kwargs):
+        cmd.append('--noaction')
+
+
+def _build_install_command_list(cmd_prefix, to_install, to_downgrade, to_reinstall):
+    '''
+    Builds a list of install commands to be executed in sequence in order to process
+    each of the to_install, to_downgrade, and to_reinstall lists.
+    '''
+    cmds = []
+    if to_install:
+        cmd = copy.deepcopy(cmd_prefix)
+        cmd.extend(to_install)
+        cmds.append(cmd)
+    if to_downgrade:
+        cmd = copy.deepcopy(cmd_prefix)
+        cmd.append('--force-downgrade')
+        cmd.extend(to_downgrade)
+        cmds.append(cmd)
+    if to_reinstall:
+        cmd = copy.deepcopy(cmd_prefix)
+        cmd.append('--force-reinstall')
+        cmd.extend(to_reinstall)
+        cmds.append(cmd)
+
+    return cmds
+
+
+def _parse_reported_packages_from_install_output(output):
+    '''
+    Parses the output of "opkg install" to determine what packages would have been
+    installed by an operation run with the --noaction flag.
+
+    We are looking for lines like:
+        Installing <package> (<version>) on <target>
+    or
+        Upgrading <package> from <oldVersion> to <version> on root
+    '''
+    reported_pkgs = {}
+    install_pattern = re.compile(r'Installing\s(?P<package>.*?)\s\((?P<version>.*?)\)\son\s(?P<target>.*?)')
+    upgrade_pattern = re.compile(r'Upgrading\s(?P<package>.*?)\sfrom\s(?P<oldVersion>.*?)\sto\s(?P<version>.*?)\son\s(?P<target>.*?)')
+    for line in salt.utils.itertools.split(output, '\n'):
+        match = install_pattern.match(line)
+        if match is None:
+            match = upgrade_pattern.match(line)
+        if match:
+            reported_pkgs[match.group('package')] = match.group('version')
+
+    return reported_pkgs
+
+
+def _execute_install_command(cmd, parse_output, errors, parsed_packages):
+    '''
+    Executes a command for the install operation.
+    If the command fails, its error output will be appended to the errors list.
+    If the command succeeds and parse_output is true, updated packages will be appended
+    to the parsed_packages dictionary.
+    '''
+    out = __salt__['cmd.run_all'](
+        cmd,
+        output_loglevel='trace',
+        python_shell=False
+    )
+    if out['retcode'] != 0:
+        if out['stderr']:
+            errors.append(out['stderr'])
+        else:
+            errors.append(out['stdout'])
+    elif parse_output:
+        parsed_packages.update(_parse_reported_packages_from_install_output(out['stdout']))
+
+
 def install(name=None,
             refresh=False,
             pkgs=None,
             sources=None,
+            reinstall=False,
             **kwargs):
     '''
     Install the passed package, add refresh=True to update the opkg database.
@@ -182,6 +402,23 @@ def install(name=None,
     refresh
         Whether or not to refresh the package database before installing.
 
+    version
+        Install a specific version of the package, e.g. 1.2.3~0ubuntu0. Ignored
+        if "pkgs" or "sources" is passed.
+
+        .. versionadded:: 2017.7.0
+
+    reinstall : False
+        Specifying reinstall=True will use ``opkg install --force-reinstall``
+        rather than simply ``opkg install`` for requested packages that are
+        already installed.
+
+        If a version is specified with the requested package, then ``opkg
+        install --force-reinstall`` will only be used if the installed version
+        matches the requested version.
+
+        .. versionadded:: 2017.7.0
+
 
     Multiple Package Installation Options:
 
@@ -194,6 +431,7 @@ def install(name=None,
         .. code-block:: bash
 
             salt '*' pkg.install pkgs='["foo", "bar"]'
+            salt '*' pkg.install pkgs='["foo", {"bar": "1.2.3-0ubuntu0"}]'
 
     sources
         A list of IPK packages to install. Must be passed as a list of dicts,
@@ -210,39 +448,161 @@ def install(name=None,
     install_recommends
         Whether to install the packages marked as recommended. Default is True.
 
+    only_upgrade
+        Only upgrade the packages (disallow downgrades), if they are already
+        installed. Default is False.
+
+        .. versionadded:: 2017.7.0
+
+    always_restart_services
+        Whether to restart services even if a reboot is required. Default is True.
+
     Returns a dict containing the new package names and versions::
 
         {'<package>': {'old': '<old-version>',
                        'new': '<new-version>'}}
     '''
-    refreshdb = salt.utils.is_true(refresh)
+    refreshdb = salt.utils.data.is_true(refresh)
 
     try:
-        pkgs, pkg_type = __salt__['pkg_resource.parse_targets'](
+        pkg_params, pkg_type = __salt__['pkg_resource.parse_targets'](
             name, pkgs, sources, **kwargs
         )
     except MinionError as exc:
         raise CommandExecutionError(exc)
 
     old = list_pkgs()
-    cmd = ['opkg', 'install']
-    if pkgs is None or len(pkgs) == 0:
+    cmd_prefix = ['opkg', 'install']
+    to_install = []
+    to_reinstall = []
+    to_downgrade = []
+
+    _append_noaction_if_testmode(cmd_prefix, **kwargs)
+    if not pkg_params:
         return {}
     elif pkg_type == 'file':
-        cmd.extend(pkgs)
+        if reinstall:
+            cmd_prefix.append('--force-reinstall')
+        if not kwargs.get('only_upgrade', False):
+            cmd_prefix.append('--force-downgrade')
+        to_install.extend(pkg_params)
     elif pkg_type == 'repository':
-        targets = list(pkgs.keys())
-        if 'install_recommends' in kwargs and not kwargs['install_recommends']:
-            cmd.append('--no-install-recommends')
-        cmd.extend(targets)
+        if not kwargs.get('install_recommends', True):
+            cmd_prefix.append('--no-install-recommends')
+        for pkgname, pkgversion in six.iteritems(pkg_params):
+            if (name and pkgs is None and kwargs.get('version') and
+                    len(pkg_params) == 1):
+                # Only use the 'version' param if 'name' was not specified as a
+                # comma-separated list
+                version_num = kwargs['version']
+            else:
+                version_num = pkgversion
+
+            if version_num is None:
+                # Don't allow downgrades if the version
+                # number is not specified.
+                if reinstall and pkgname in old:
+                    to_reinstall.append(pkgname)
+                else:
+                    to_install.append(pkgname)
+            else:
+                pkgstr = '{0}={1}'.format(pkgname, version_num)
+                cver = old.get(pkgname, '')
+                if reinstall and cver and salt.utils.versions.compare(
+                        ver1=version_num,
+                        oper='==',
+                        ver2=cver,
+                        cmp_func=version_cmp):
+                    to_reinstall.append(pkgstr)
+                elif not cver or salt.utils.versions.compare(
+                        ver1=version_num,
+                        oper='>=',
+                        ver2=cver,
+                        cmp_func=version_cmp):
+                    to_install.append(pkgstr)
+                else:
+                    if not kwargs.get('only_upgrade', False):
+                        to_downgrade.append(pkgstr)
+                    else:
+                        # This should cause the command to fail.
+                        to_install.append(pkgstr)
+
+    cmds = _build_install_command_list(cmd_prefix, to_install, to_downgrade, to_reinstall)
+
+    if not cmds:
+        return {}
 
     if refreshdb:
         refresh_db()
 
-    __salt__['cmd.run'](cmd, output_loglevel='trace')
+    errors = []
+    is_testmode = _is_testmode(**kwargs)
+    test_packages = {}
+    for cmd in cmds:
+        _execute_install_command(cmd, is_testmode, errors, test_packages)
+
     __context__.pop('pkg.list_pkgs', None)
     new = list_pkgs()
-    return salt.utils.compare_dicts(old, new)
+    if is_testmode:
+        new = copy.deepcopy(new)
+        new.update(test_packages)
+
+    ret = salt.utils.data.compare_dicts(old, new)
+
+    if pkg_type == 'file' and reinstall:
+        # For file-based packages, prepare 'to_reinstall' to have a list
+        # of all the package names that may have been reinstalled.
+        # This way, we could include reinstalled packages in 'ret'.
+        for pkgfile in to_install:
+            # Convert from file name to package name.
+            cmd = ['opkg', 'info', pkgfile]
+            out = __salt__['cmd.run_all'](
+                cmd,
+                output_loglevel='trace',
+                python_shell=False
+            )
+            if out['retcode'] == 0:
+                # Just need the package name.
+                pkginfo_dict = _process_info_installed_output(
+                    out['stdout'], []
+                )
+                if pkginfo_dict:
+                    to_reinstall.append(list(pkginfo_dict.keys())[0])
+
+    for pkgname in to_reinstall:
+        if pkgname not in ret or pkgname in old:
+            ret.update({pkgname: {'old': old.get(pkgname, ''),
+                                  'new': new.get(pkgname, '')}})
+
+    rs_result = _get_restartcheck_result(errors)
+
+    if errors:
+        raise CommandExecutionError(
+            'Problem encountered installing package(s)',
+            info={'errors': errors, 'changes': ret}
+        )
+
+    _process_restartcheck_result(rs_result, **kwargs)
+
+    return ret
+
+
+def _parse_reported_packages_from_remove_output(output):
+    '''
+    Parses the output of "opkg remove" to determine what packages would have been
+    removed by an operation run with the --noaction flag.
+
+    We are looking for lines like
+        Removing <package> (<version>) from <Target>...
+    '''
+    reported_pkgs = {}
+    remove_pattern = re.compile(r'Removing\s(?P<package>.*?)\s\((?P<version>.*?)\)\sfrom\s(?P<target>.*?)...')
+    for line in salt.utils.itertools.split(output, '\n'):
+        match = remove_pattern.match(line)
+        if match:
+            reported_pkgs[match.group('package')] = ''
+
+    return reported_pkgs
 
 
 def remove(name=None, pkgs=None, **kwargs):  # pylint: disable=unused-argument
@@ -259,6 +619,15 @@ def remove(name=None, pkgs=None, **kwargs):  # pylint: disable=unused-argument
         A list of packages to delete. Must be passed as a python list. The
         ``name`` parameter will be ignored if this option is passed.
 
+    remove_dependencies
+        Remove package and all dependencies
+
+        .. versionadded:: 2019.2.0
+
+    auto_remove_deps
+        Remove packages that were installed automatically to satisfy dependencies
+
+        .. versionadded:: 2019.2.0
 
     Returns a dict containing the changes.
 
@@ -269,6 +638,7 @@ def remove(name=None, pkgs=None, **kwargs):  # pylint: disable=unused-argument
         salt '*' pkg.remove <package name>
         salt '*' pkg.remove <package1>,<package2>,<package3>
         salt '*' pkg.remove pkgs='["foo", "bar"]'
+        salt '*' pkg.remove pkgs='["foo", "bar"]' remove_dependencies=True auto_remove_deps=True
     '''
     try:
         pkg_params = __salt__['pkg_resource.parse_targets'](name, pkgs)[0]
@@ -280,11 +650,44 @@ def remove(name=None, pkgs=None, **kwargs):  # pylint: disable=unused-argument
     if not targets:
         return {}
     cmd = ['opkg', 'remove']
+    _append_noaction_if_testmode(cmd, **kwargs)
+    if kwargs.get('remove_dependencies', False):
+        cmd.append('--force-removal-of-dependent-packages')
+    if kwargs.get('auto_remove_deps', False):
+        cmd.append('--autoremove')
     cmd.extend(targets)
-    __salt__['cmd.run'](cmd, output_loglevel='trace')
+
+    out = __salt__['cmd.run_all'](
+        cmd,
+        output_loglevel='trace',
+        python_shell=False
+    )
+    if out['retcode'] != 0:
+        if out['stderr']:
+            errors = [out['stderr']]
+        else:
+            errors = [out['stdout']]
+    else:
+        errors = []
+
     __context__.pop('pkg.list_pkgs', None)
     new = list_pkgs()
-    return salt.utils.compare_dicts(old, new)
+    if _is_testmode(**kwargs):
+        reportedPkgs = _parse_reported_packages_from_remove_output(out['stdout'])
+        new = {k: v for k, v in new.items() if k not in reportedPkgs}
+    ret = salt.utils.data.compare_dicts(old, new)
+
+    rs_result = _get_restartcheck_result(errors)
+
+    if errors:
+        raise CommandExecutionError(
+            'Problem encountered removing package(s)',
+            info={'errors': errors, 'changes': ret}
+        )
+
+    _process_restartcheck_result(rs_result, **kwargs)
+
+    return ret
 
 
 def purge(name=None, pkgs=None, **kwargs):  # pylint: disable=unused-argument
@@ -316,14 +719,17 @@ def purge(name=None, pkgs=None, **kwargs):  # pylint: disable=unused-argument
     return remove(name=name, pkgs=pkgs)
 
 
-def upgrade(refresh=True):
+def upgrade(refresh=True, **kwargs):  # pylint: disable=unused-argument
     '''
     Upgrades all packages via ``opkg upgrade``
 
-    Returns a dict containing the changes.
+    Returns a dictionary containing the changes:
+
+    .. code-block:: python
 
         {'<package>':  {'old': '<old-version>',
                         'new': '<new-version>'}}
+
 
     CLI Example:
 
@@ -336,24 +742,34 @@ def upgrade(refresh=True):
            'comment': '',
            }
 
-    if salt.utils.is_true(refresh):
+    errors = []
+
+    if salt.utils.data.is_true(refresh):
         refresh_db()
 
     old = list_pkgs()
 
     cmd = ['opkg', 'upgrade']
-    call = __salt__['cmd.run_all'](cmd, output_loglevel='trace')
+    result = __salt__['cmd.run_all'](cmd,
+                                     output_loglevel='trace',
+                                     python_shell=False)
+    __context__.pop('pkg.list_pkgs', None)
+    new = list_pkgs()
+    ret = salt.utils.data.compare_dicts(old, new)
 
-    if call['retcode'] != 0:
-        ret['result'] = False
-        if 'stderr' in call:
-            ret['comment'] += call['stderr']
-        if 'stdout' in call:
-            ret['comment'] += call['stdout']
-    else:
-        __context__.pop('pkg.list_pkgs', None)
-        new = list_pkgs()
-        ret['changes'] = salt.utils.compare_dicts(old, new)
+    if result['retcode'] != 0:
+        errors.append(result)
+
+    rs_result = _get_restartcheck_result(errors)
+
+    if errors:
+        raise CommandExecutionError(
+            'Problem encountered upgrading packages',
+            info={'errors': errors, 'changes': ret}
+        )
+
+    _process_restartcheck_result(rs_result, **kwargs)
+
     return ret
 
 
@@ -508,9 +924,9 @@ def _get_state(pkg):
     '''
     cmd = ['opkg', 'status']
     cmd.append(pkg)
-    out = __salt__['cmd.run'](cmd)
+    out = __salt__['cmd.run'](cmd, python_shell=False)
     state_flag = ''
-    for line in out.splitlines():
+    for line in salt.utils.itertools.split(out, '\n'):
         if line.startswith('Status'):
             _status, _state_want, state_flag, _state_status = line.split()
 
@@ -539,14 +955,12 @@ def _set_state(pkg, state):
     ret = {}
     valid_states = ('hold', 'noprune', 'user', 'ok', 'installed', 'unpacked')
     if state not in valid_states:
-        raise SaltInvocationError(
-            'Invalid state: {0}'.format(state)
-        )
+        raise SaltInvocationError('Invalid state: {0}'.format(state))
     oldstate = _get_state(pkg)
     cmd = ['opkg', 'flag']
     cmd.append(state)
     cmd.append(pkg)
-    _out = __salt__['cmd.run'](cmd)
+    _out = __salt__['cmd.run'](cmd, python_shell=False)
 
     # Missing return value check due to opkg issue 160
     ret[pkg] = {'old': oldstate,
@@ -567,9 +981,9 @@ def list_pkgs(versions_as_list=False, **kwargs):
         salt '*' pkg.list_pkgs
         salt '*' pkg.list_pkgs versions_as_list=True
     '''
-    versions_as_list = salt.utils.is_true(versions_as_list)
+    versions_as_list = salt.utils.data.is_true(versions_as_list)
     # not yet implemented or not applicable
-    if any([salt.utils.is_true(kwargs.get(x))
+    if any([salt.utils.data.is_true(kwargs.get(x))
             for x in ('removed', 'purge_desired')]):
         return {}
 
@@ -583,9 +997,15 @@ def list_pkgs(versions_as_list=False, **kwargs):
 
     cmd = ['opkg', 'list-installed']
     ret = {}
-    out = __salt__['cmd.run'](cmd, output_loglevel='trace')
-    for line in out.splitlines():
-        pkg_name, pkg_version = line.split(' - ')
+    out = __salt__['cmd.run'](cmd, output_loglevel='trace', python_shell=False)
+    for line in salt.utils.itertools.split(out, '\n'):
+        # This is a continuation of package description
+        if not line or line[0] == ' ':
+            continue
+
+        # This contains package name, version, and description.
+        # Extract the first two.
+        pkg_name, pkg_version = line.split(' - ', 2)[:2]
         __salt__['pkg_resource.add_pkg'](ret, pkg_name, pkg_version)
 
     __salt__['pkg_resource.sort_pkglist'](ret)
@@ -595,7 +1015,7 @@ def list_pkgs(versions_as_list=False, **kwargs):
     return ret
 
 
-def list_upgrades(refresh=True):
+def list_upgrades(refresh=True, **kwargs):  # pylint: disable=unused-argument
     '''
     List all available package upgrades.
 
@@ -606,11 +1026,13 @@ def list_upgrades(refresh=True):
         salt '*' pkg.list_upgrades
     '''
     ret = {}
-    if salt.utils.is_true(refresh):
+    if salt.utils.data.is_true(refresh):
         refresh_db()
 
     cmd = ['opkg', 'list-upgradable']
-    call = __salt__['cmd.run_all'](cmd, output_loglevel='trace')
+    call = __salt__['cmd.run_all'](cmd,
+                                   output_loglevel='trace',
+                                   python_shell=False)
 
     if call['retcode'] != 0:
         comment = ''
@@ -618,9 +1040,7 @@ def list_upgrades(refresh=True):
             comment += call['stderr']
         if 'stdout' in call:
             comment += call['stdout']
-        raise CommandExecutionError(
-                '{0}'.format(comment)
-        )
+        raise CommandExecutionError(comment)
     else:
         out = call['stdout']
 
@@ -631,7 +1051,138 @@ def list_upgrades(refresh=True):
     return ret
 
 
-def upgrade_available(name):
+def _convert_to_standard_attr(attr):
+    '''
+    Helper function for _process_info_installed_output()
+
+    Converts an opkg attribute name to a standard attribute
+    name which is used across 'pkg' modules.
+    '''
+    ret_attr = ATTR_MAP.get(attr, None)
+    if ret_attr is None:
+        # All others convert to lowercase
+        return attr.lower()
+    return ret_attr
+
+
+def _process_info_installed_output(out, filter_attrs):
+    '''
+    Helper function for info_installed()
+
+    Processes stdout output from a single invocation of
+    'opkg status'.
+    '''
+    ret = {}
+    name = None
+    attrs = {}
+    attr = None
+
+    for line in salt.utils.itertools.split(out, '\n'):
+        if line and line[0] == ' ':
+            # This is a continuation of the last attr
+            if filter_attrs is None or attr in filter_attrs:
+                line = line.strip()
+                if attrs[attr]:
+                    # If attr is empty, don't add leading newline
+                    attrs[attr] += '\n'
+                attrs[attr] += line
+            continue
+        line = line.strip()
+        if not line:
+            # Separator between different packages
+            if name:
+                ret[name] = attrs
+            name = None
+            attrs = {}
+            attr = None
+            continue
+        key, value = line.split(':', 1)
+        value = value.lstrip()
+        attr = _convert_to_standard_attr(key)
+        if attr == 'name':
+            name = value
+        elif filter_attrs is None or attr in filter_attrs:
+            attrs[attr] = value
+
+    if name:
+        ret[name] = attrs
+    return ret
+
+
+def info_installed(*names, **kwargs):
+    '''
+    Return the information of the named package(s), installed on the system.
+
+    .. versionadded:: 2017.7.0
+
+    :param names:
+        Names of the packages to get information about. If none are specified,
+        will return information for all installed packages.
+
+    :param attr:
+        Comma-separated package attributes. If no 'attr' is specified, all available attributes returned.
+
+        Valid attributes are:
+            arch, conffiles, conflicts, depends, description, filename, group,
+            install_date_time_t, md5sum, packager, provides, recommends,
+            replaces, size, source, suggests, url, version
+
+    CLI example:
+
+    .. code-block:: bash
+
+        salt '*' pkg.info_installed
+        salt '*' pkg.info_installed attr=version,packager
+        salt '*' pkg.info_installed <package1>
+        salt '*' pkg.info_installed <package1> <package2> <package3> ...
+        salt '*' pkg.info_installed <package1> attr=version,packager
+        salt '*' pkg.info_installed <package1> <package2> <package3> ... attr=version,packager
+    '''
+    attr = kwargs.pop('attr', None)
+    if attr is None:
+        filter_attrs = None
+    elif isinstance(attr, six.string_types):
+        filter_attrs = set(attr.split(','))
+    else:
+        filter_attrs = set(attr)
+
+    ret = {}
+    if names:
+        # Specific list of names of installed packages
+        for name in names:
+            cmd = ['opkg', 'status', name]
+            call = __salt__['cmd.run_all'](cmd,
+                                           output_loglevel='trace',
+                                           python_shell=False)
+            if call['retcode'] != 0:
+                comment = ''
+                if call['stderr']:
+                    comment += call['stderr']
+                else:
+                    comment += call['stdout']
+
+                raise CommandExecutionError(comment)
+            ret.update(_process_info_installed_output(call['stdout'], filter_attrs))
+    else:
+        # All installed packages
+        cmd = ['opkg', 'status']
+        call = __salt__['cmd.run_all'](cmd,
+                                       output_loglevel='trace',
+                                       python_shell=False)
+        if call['retcode'] != 0:
+            comment = ''
+            if call['stderr']:
+                comment += call['stderr']
+            else:
+                comment += call['stdout']
+
+            raise CommandExecutionError(comment)
+        ret.update(_process_info_installed_output(call['stdout'], filter_attrs))
+
+    return ret
+
+
+def upgrade_available(name, **kwargs):  # pylint: disable=unused-argument
     '''
     Check whether or not an upgrade is available for a given package
 
@@ -644,12 +1195,16 @@ def upgrade_available(name):
     return latest_version(name) != ''
 
 
-@_which('opkg-compare-versions')
-def version_cmp(pkg1, pkg2):
+def version_cmp(pkg1, pkg2, ignore_epoch=False, **kwargs):  # pylint: disable=unused-argument
     '''
     Do a cmp-style comparison on two packages. Return -1 if pkg1 < pkg2, 0 if
     pkg1 == pkg2, and 1 if pkg1 > pkg2. Return None if there was a problem
     making the comparison.
+
+    ignore_epoch : False
+        Set to ``True`` to ignore the epoch when comparing versions
+
+        .. versionadded:: 2016.3.4
 
     CLI Example:
 
@@ -657,23 +1212,103 @@ def version_cmp(pkg1, pkg2):
 
         salt '*' pkg.version_cmp '0.2.4-0' '0.2.4.1-0'
     '''
-    cmd_compare = ['opkg-compare-versions']
+    normalize = lambda x: six.text_type(x).split(':', 1)[-1] if ignore_epoch else six.text_type(x)
+    pkg1 = normalize(pkg1)
+    pkg2 = normalize(pkg2)
+
+    output = __salt__['cmd.run_stdout'](['opkg', '--version'],
+                                        output_loglevel='trace',
+                                        python_shell=False)
+    opkg_version = output.split(' ')[2].strip()
+    if salt.utils.versions.LooseVersion(opkg_version) >= \
+            salt.utils.versions.LooseVersion('0.3.4'):
+        cmd_compare = ['opkg', 'compare-versions']
+    elif salt.utils.path.which('opkg-compare-versions'):
+        cmd_compare = ['opkg-compare-versions']
+    else:
+        log.warning('Unable to find a compare-versions utility installed. Either upgrade opkg to '
+                    'version > 0.3.4 (preferred) or install the older opkg-compare-versions script.')
+        return None
+
     for oper, ret in (("<<", -1), ("=", 0), (">>", 1)):
         cmd = cmd_compare[:]
         cmd.append(_cmd_quote(pkg1))
         cmd.append(oper)
         cmd.append(_cmd_quote(pkg2))
-        retcode = __salt__['cmd.retcode'](
-            cmd, output_loglevel='trace', ignore_retcode=True
-        )
+        retcode = __salt__['cmd.retcode'](cmd,
+                                          output_loglevel='trace',
+                                          ignore_retcode=True,
+                                          python_shell=False)
         if retcode == 0:
             return ret
     return None
 
 
-def list_repos():
+def _set_repo_option(repo, option):
     '''
-    Lists all repos on /etc/opkg/*.conf
+    Set the option to repo
+    '''
+    if not option:
+        return
+    opt = option.split('=')
+    if len(opt) != 2:
+        return
+    if opt[0] == 'trusted':
+        repo['trusted'] = opt[1] == 'yes'
+    else:
+        repo[opt[0]] = opt[1]
+
+
+def _set_repo_options(repo, options):
+    '''
+    Set the options to the repo.
+    '''
+    delimiters = "[", "]"
+    pattern = '|'.join(map(re.escape, delimiters))
+    for option in options:
+        splitted = re.split(pattern, option)
+        for opt in splitted:
+            _set_repo_option(repo, opt)
+
+
+def _create_repo(line, filename):
+    '''
+    Create repo
+    '''
+    repo = {}
+    if line.startswith('#'):
+        repo['enabled'] = False
+        line = line[1:]
+    else:
+        repo['enabled'] = True
+    cols = salt.utils.args.shlex_split(line.strip())
+    repo['compressed'] = not cols[0] in 'src'
+    repo['name'] = cols[1]
+    repo['uri'] = cols[2]
+    repo['file'] = os.path.join(OPKG_CONFDIR, filename)
+    if len(cols) > 3:
+        _set_repo_options(repo, cols[3:])
+    return repo
+
+
+def _read_repos(conf_file, repos, filename, regex):
+    '''
+    Read repos from configuration file
+    '''
+    for line in conf_file:
+        line = salt.utils.stringutils.to_unicode(line)
+        if not regex.search(line):
+            continue
+        repo = _create_repo(line, filename)
+
+        # do not store duplicated uri's
+        if repo['uri'] not in repos:
+            repos[repo['uri']] = [repo]
+
+
+def list_repos(**kwargs):  # pylint: disable=unused-argument
+    '''
+    Lists all repos on ``/etc/opkg/*.conf``
 
     CLI Example:
 
@@ -684,99 +1319,103 @@ def list_repos():
     repos = {}
     regex = re.compile(REPO_REGEXP)
     for filename in os.listdir(OPKG_CONFDIR):
-        if filename.endswith(".conf"):
-            with open(os.path.join(OPKG_CONFDIR, filename)) as conf_file:
-                for line in conf_file:
-                    if regex.search(line):
-                        repo = {}
-                        if line.startswith('#'):
-                            repo['enabled'] = False
-                            line = line[1:]
-                        else:
-                            repo['enabled'] = True
-                        cols = line.strip().split()
-                        if cols[0] in 'src':
-                            repo['compressed'] = False
-                        else:
-                            repo['compressed'] = True
-                        repo['name'] = cols[1]
-                        repo['uri'] = cols[2]
-                        repo['file'] = os.path.join(OPKG_CONFDIR, filename)
-                        # do not store duplicated uri's
-                        if repo['uri'] not in repos:
-                            repos[repo['uri']] = [repo]
+        if not filename.endswith(".conf"):
+            continue
+        with salt.utils.files.fopen(os.path.join(OPKG_CONFDIR, filename)) as conf_file:
+            _read_repos(conf_file, repos, filename, regex)
     return repos
 
 
-def get_repo(alias):
+def get_repo(repo, **kwargs):  # pylint: disable=unused-argument
     '''
-    Display a repo from the /etc/opkg/*.conf
+    Display a repo from the ``/etc/opkg/*.conf``
 
     CLI Examples:
 
     .. code-block:: bash
 
-        salt '*' pkg.get_repo alias
+        salt '*' pkg.get_repo repo
     '''
     repos = list_repos()
 
     if repos:
         for source in six.itervalues(repos):
             for sub in source:
-                if sub['name'] == alias:
+                if sub['name'] == repo:
                     return sub
     return {}
 
 
-def _del_repo_from_file(alias, filepath):
+def _del_repo_from_file(repo, filepath):
     '''
     Remove a repo from filepath
     '''
-    with open(filepath) as fhandle:
+    with salt.utils.files.fopen(filepath) as fhandle:
         output = []
         regex = re.compile(REPO_REGEXP)
         for line in fhandle:
+            line = salt.utils.stringutils.to_unicode(line)
             if regex.search(line):
                 if line.startswith('#'):
                     line = line[1:]
-                cols = line.strip().split()
-                if alias != cols[1]:
-                    output.append(line)
-    with open(filepath, 'w') as fhandle:
+                cols = salt.utils.args.shlex_split(line.strip())
+                if repo != cols[1]:
+                    output.append(salt.utils.stringutils.to_str(line))
+    with salt.utils.files.fopen(filepath, 'w') as fhandle:
         fhandle.writelines(output)
 
 
-def _add_new_repo(alias, uri, compressed, enabled=True):
+def _set_trusted_option_if_needed(repostr, trusted):
+    '''
+    Set trusted option to repo if needed
+    '''
+    if trusted is True:
+        repostr += ' [trusted=yes]'
+    elif trusted is False:
+        repostr += ' [trusted=no]'
+    return repostr
+
+
+def _add_new_repo(repo, properties):
     '''
     Add a new repo entry
     '''
-    repostr = '# ' if not enabled else ''
-    repostr += 'src/gz ' if compressed else 'src '
-    repostr += alias + ' ' + uri + '\n'
-    conffile = os.path.join(OPKG_CONFDIR, alias + '.conf')
+    repostr = '# ' if not properties.get('enabled') else ''
+    repostr += 'src/gz ' if properties.get('compressed') else 'src '
+    if ' ' in repo:
+        repostr += '"' + repo + '" '
+    else:
+        repostr += repo + ' '
+    repostr += properties.get('uri')
+    repostr = _set_trusted_option_if_needed(repostr, properties.get('trusted'))
+    repostr += '\n'
+    conffile = os.path.join(OPKG_CONFDIR, repo + '.conf')
 
-    with open(conffile, 'a') as fhandle:
-        fhandle.write(repostr)
+    with salt.utils.files.fopen(conffile, 'a') as fhandle:
+        fhandle.write(salt.utils.stringutils.to_str(repostr))
 
 
-def _mod_repo_in_file(alias, repostr, filepath):
+def _mod_repo_in_file(repo, repostr, filepath):
     '''
     Replace a repo entry in filepath with repostr
     '''
-    with open(filepath) as fhandle:
+    with salt.utils.files.fopen(filepath) as fhandle:
         output = []
         for line in fhandle:
-            if alias not in line:
+            cols = salt.utils.args.shlex_split(
+                salt.utils.stringutils.to_unicode(line).strip()
+            )
+            if repo not in cols:
                 output.append(line)
             else:
-                output.append(repostr + '\n')
-    with open(filepath, 'w') as fhandle:
+                output.append(salt.utils.stringutils.to_str(repostr + '\n'))
+    with salt.utils.files.fopen(filepath, 'w') as fhandle:
         fhandle.writelines(output)
 
 
-def del_repo(alias):
+def del_repo(repo, **kwargs):  # pylint: disable=unused-argument
     '''
-    Delete a repo from /etc/opkg/*.conf
+    Delete a repo from ``/etc/opkg/*.conf``
 
     If the file does not contain any other repo configuration, the file itself
     will be deleted.
@@ -785,48 +1424,49 @@ def del_repo(alias):
 
     .. code-block:: bash
 
-        salt '*' pkg.del_repo alias
+        salt '*' pkg.del_repo repo
     '''
+    refresh = salt.utils.data.is_true(kwargs.get('refresh', True))
     repos = list_repos()
     if repos:
         deleted_from = dict()
-        for repo in repos:
-            source = repos[repo][0]
-            if source['name'] == alias:
+        for repository in repos:
+            source = repos[repository][0]
+            if source['name'] == repo:
                 deleted_from[source['file']] = 0
-                _del_repo_from_file(alias, source['file'])
+                _del_repo_from_file(repo, source['file'])
 
         if deleted_from:
             ret = ''
-            for repo in repos:
-                source = repos[repo][0]
+            for repository in repos:
+                source = repos[repository][0]
                 if source['file'] in deleted_from:
                     deleted_from[source['file']] += 1
             for repo_file, count in six.iteritems(deleted_from):
-                msg = 'Repo {0!r} has been removed from {1}.\n'
+                msg = 'Repo \'{0}\' has been removed from {1}.\n'
                 if count == 1 and os.path.isfile(repo_file):
-                    msg = ('File {1} containing repo {0!r} has been '
+                    msg = ('File {1} containing repo \'{0}\' has been '
                            'removed.\n')
                     try:
                         os.remove(repo_file)
                     except OSError:
                         pass
-                ret += msg.format(alias, repo_file)
-            # explicit refresh after a repo is deleted
-            refresh_db()
+                ret += msg.format(repo, repo_file)
+            if refresh:
+                refresh_db()
             return ret
 
-    return "Repo {0} doesn't exist in the opkg repo lists".format(alias)
+    return "Repo {0} doesn't exist in the opkg repo lists".format(repo)
 
 
-def mod_repo(alias, **kwargs):
+def mod_repo(repo, **kwargs):
     '''
     Modify one or more values for a repo.  If the repo does not exist, it will
     be created, so long as uri is defined.
 
     The following options are available to modify a repo definition:
 
-    alias
+    repo
         alias by which opkg refers to the repo.
     uri
         the URI to the repo.
@@ -842,8 +1482,8 @@ def mod_repo(alias, **kwargs):
 
     .. code-block:: bash
 
-        salt '*' pkg.mod_repo alias uri=http://new/uri
-        salt '*' pkg.mod_repo alias enabled=False
+        salt '*' pkg.mod_repo repo uri=http://new/uri
+        salt '*' pkg.mod_repo repo enabled=False
     '''
     repos = list_repos()
     found = False
@@ -851,9 +1491,9 @@ def mod_repo(alias, **kwargs):
     if 'uri' in kwargs:
         uri = kwargs['uri']
 
-    for repo in repos:
-        source = repos[repo][0]
-        if source['name'] == alias:
+    for repository in repos:
+        source = repos[repository][0]
+        if source['name'] == repo:
             found = True
             repostr = ''
             if 'enabled' in kwargs and not kwargs['enabled']:
@@ -862,9 +1502,16 @@ def mod_repo(alias, **kwargs):
                 repostr += 'src/gz ' if kwargs['compressed'] else 'src'
             else:
                 repostr += 'src/gz' if source['compressed'] else 'src'
-            repostr += ' {0}'.format(kwargs['alias'] if 'alias' in kwargs else alias)
+            repo_alias = kwargs['alias'] if 'alias' in kwargs else repo
+            if ' ' in repo_alias:
+                repostr += ' "{0}"'.format(repo_alias)
+            else:
+                repostr += ' {0}'.format(repo_alias)
             repostr += ' {0}'.format(kwargs['uri'] if 'uri' in kwargs else source['uri'])
-            _mod_repo_in_file(alias, repostr, source['file'])
+            trusted = kwargs.get('trusted')
+            repostr = _set_trusted_option_if_needed(repostr, trusted) if trusted is not None else \
+                _set_trusted_option_if_needed(repostr, source.get('trusted'))
+            _mod_repo_in_file(repo, repostr, source['file'])
         elif uri and source['uri'] == uri:
             raise CommandExecutionError(
                 'Repository \'{0}\' already exists as \'{1}\'.'.format(uri, source['name']))
@@ -873,18 +1520,20 @@ def mod_repo(alias, **kwargs):
         # Need to add a new repo
         if 'uri' not in kwargs:
             raise CommandExecutionError(
-                'Repository \'{0}\' not found and no URI passed to create one.'.format(alias))
+                'Repository \'{0}\' not found and no URI passed to create one.'.format(repo))
+        properties = {'uri': kwargs['uri']}
         # If compressed is not defined, assume True
-        compressed = kwargs['compressed'] if 'compressed' in kwargs else True
+        properties['compressed'] = kwargs['compressed'] if 'compressed' in kwargs else True
         # If enabled is not defined, assume True
-        enabled = kwargs['enabled'] if 'enabled' in kwargs else True
-        _add_new_repo(alias, kwargs['uri'], compressed, enabled)
+        properties['enabled'] = kwargs['enabled'] if 'enabled' in kwargs else True
+        properties['trusted'] = kwargs.get('trusted')
+        _add_new_repo(repo, properties)
 
     if 'refresh' in kwargs:
         refresh_db()
 
 
-def file_list(*packages):
+def file_list(*packages, **kwargs):  # pylint: disable=unused-argument
     '''
     List the files that belong to a package. Not specifying any packages will
     return a list of _every_ file on the system's package database (not
@@ -905,7 +1554,7 @@ def file_list(*packages):
     return {'errors': output['errors'], 'files': files}
 
 
-def file_dict(*packages):
+def file_dict(*packages, **kwargs):  # pylint: disable=unused-argument
     '''
     List the files that belong to a package, grouped by package. Not
     specifying any packages will return a list of _every_ file on the system's
@@ -930,7 +1579,9 @@ def file_dict(*packages):
         files = []
         cmd = cmd_files[:]
         cmd.append(package)
-        out = __salt__['cmd.run_all'](cmd, output_loglevel='trace')
+        out = __salt__['cmd.run_all'](cmd,
+                                      output_loglevel='trace',
+                                      python_shell=False)
         for line in out['stdout'].splitlines():
             if line.startswith('/'):
                 files.append(line)
@@ -945,7 +1596,7 @@ def file_dict(*packages):
     return {'errors': errors, 'packages': ret}
 
 
-def owner(*paths):
+def owner(*paths, **kwargs):  # pylint: disable=unused-argument
     '''
     Return the name of the package that owns the file. Multiple file paths can
     be passed. Like :mod:`pkg.version <salt.modules.opkg.version`, if a single
@@ -966,12 +1617,32 @@ def owner(*paths):
     cmd_search = ['opkg', 'search']
     for path in paths:
         cmd = cmd_search[:]
-        cmd.append(_cmd_quote(path))
-        output = __salt__['cmd.run_stdout'](cmd, output_loglevel='trace')
+        cmd.append(path)
+        output = __salt__['cmd.run_stdout'](cmd,
+                                            output_loglevel='trace',
+                                            python_shell=False)
         if output:
             ret[path] = output.split(' - ')[0].strip()
         else:
             ret[path] = ''
     if len(ret) == 1:
-        return six.itervalues(ret)
+        return next(six.itervalues(ret))
     return ret
+
+
+def version_clean(version):
+    '''
+    Clean the version string removing extra data.
+    There's nothing do to here for nipkg.py, therefore it will always
+    return the given version.
+    '''
+    return version
+
+
+def check_extra_requirements(pkgname, pkgver):
+    '''
+    Check if the installed package already has the given requirements.
+    There's nothing do to here for nipkg.py, therefore it will always
+    return True.
+    '''
+    return True

@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 '''
+Provides access to randomness generators.
+=========================================
+
 .. versionadded:: 2014.7.0
 
-Provides access to randomness generators.
 '''
-from __future__ import absolute_import
 # Import python libs
+from __future__ import absolute_import, print_function, unicode_literals
+import base64
 import hashlib
 import random
 
@@ -13,18 +16,30 @@ import random
 import salt.utils.pycrypto
 from salt.exceptions import SaltInvocationError
 
+# Import 3rd-party libs
+from salt.ext import six
+
+if six.PY2:
+    ALGORITHMS_ATTR_NAME = 'algorithms'
+else:
+    ALGORITHMS_ATTR_NAME = 'algorithms_guaranteed'
+
 # Define the module's virtual name
 __virtualname__ = 'random'
 
 
-def __virtual__():
+def __virtual__(algorithm='sha512'):
     '''
-    Confirm this module is on a Debian based system
+    Sanity check for compatibility with Python 2.6 / 2.7
     '''
-    # Certain versions of hashlib do not contain
-    # the necessary functions
-    if not hasattr(hashlib, 'algorithms'):
-        return False
+    # The hashlib function on Python <= 2.6 does not provide the attribute 'algorithms'
+    # This attribute was introduced on Python >= 2.7
+    if six.PY2:
+        if not hasattr(hashlib, 'algorithms') and not hasattr(hashlib, algorithm):
+            return (False, 'The random execution module cannot be loaded: only available in Python >= 2.7.')
+
+    # Under python >= 3.2, the attribute name changed to 'algorithms_guaranteed'
+    # Since we support python 3.4+, we're good
     return __virtualname__
 
 
@@ -47,7 +62,15 @@ def hash(value, algorithm='sha512'):
 
         salt '*' random.hash 'I am a string' md5
     '''
-    if algorithm in hashlib.algorithms:
+    if six.PY3 and isinstance(value, six.string_types):
+        # Under Python 3 we must work with bytes
+        value = value.encode(__salt_system_encoding__)
+
+    if hasattr(hashlib, ALGORITHMS_ATTR_NAME) and algorithm in getattr(hashlib, ALGORITHMS_ATTR_NAME):
+        hasher = hashlib.new(algorithm)
+        hasher.update(value)
+        out = hasher.hexdigest()
+    elif hasattr(hashlib, algorithm):
         hasher = hashlib.new(algorithm)
         hasher.update(value)
         out = hasher.hexdigest()
@@ -73,13 +96,29 @@ def str_encode(value, encoder='base64'):
 
         salt '*' random.str_encode 'I am a new string' base64
     '''
-    try:
-        out = value.encode(encoder)
-    except LookupError:
-        raise SaltInvocationError('You must specify a valid encoder')
-    except AttributeError:
-        raise SaltInvocationError('Value must be an encode-able string')
-
+    if six.PY2:
+        try:
+            out = value.encode(encoder)
+        except LookupError:
+            raise SaltInvocationError('You must specify a valid encoder')
+        except AttributeError:
+            raise SaltInvocationError('Value must be an encode-able string')
+    else:
+        if isinstance(value, six.string_types):
+            value = value.encode(__salt_system_encoding__)
+        if encoder == 'base64':
+            try:
+                out = base64.b64encode(value)
+                out = out.decode(__salt_system_encoding__)
+            except TypeError:
+                raise SaltInvocationError('Value must be an encode-able string')
+        else:
+            try:
+                out = value.encode(encoder)
+            except LookupError:
+                raise SaltInvocationError('You must specify a valid encoder')
+            except AttributeError:
+                raise SaltInvocationError('Value must be an encode-able string')
     return out
 
 
@@ -125,7 +164,7 @@ def shadow_hash(crypt_salt=None, password=None, algorithm='sha512'):
     return salt.utils.pycrypto.gen_hash(crypt_salt, password, algorithm)
 
 
-def rand_int(start=1, end=10):
+def rand_int(start=1, end=10, seed=None):
     '''
     Returns a random integer number between the start and end number.
 
@@ -137,12 +176,21 @@ def rand_int(start=1, end=10):
     end : 10
         Any valid integer number
 
+    seed :
+        Optional hashable object
+
+    .. versionchanged:: 2019.2.0
+        Added seed argument. Will return the same result when run with the same seed.
+
+
     CLI Example:
 
     .. code-block:: bash
 
         salt '*' random.rand_int 1 10
     '''
+    if seed is not None:
+        random.seed(seed)
     return random.randint(start, end)
 
 

@@ -113,16 +113,22 @@ correctly.  Replace with equivalent SQL for other ODBC-compliant servers
   .. code-block:: bash
 
     salt '*' test.ping --return odbc --return_config alternative
-'''
-from __future__ import absolute_import
-# Let's not allow PyLint complain about string substitution
-# pylint: disable=W1321,E1321
 
+To override individual configuration items, append --return_kwargs '{"key:": "value"}' to the salt command.
+
+.. versionadded:: 2016.3.0
+
+.. code-block:: bash
+
+    salt '*' test.ping --return odbc --return_kwargs '{"dsn": "dsn-name"}'
+
+'''
 # Import python libs
-import json
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import Salt libs
 import salt.utils.jid
+import salt.utils.json
 import salt.returners
 
 # FIXME We'll need to handle this differently for Windows.
@@ -140,7 +146,7 @@ __virtualname__ = 'odbc'
 
 def __virtual__():
     if not HAS_ODBC:
-        return False
+        return False, 'Could not import odbc returner; pyodbc is not installed.'
     return True
 
 
@@ -196,16 +202,16 @@ def returner(ret):
         sql, (
             ret['fun'],
             ret['jid'],
-            json.dumps(ret['return']),
+            salt.utils.json.dumps(ret['return']),
             ret['id'],
             ret['success'],
-            json.dumps(ret)
+            salt.utils.json.dumps(ret)
         )
     )
     _close_conn(conn)
 
 
-def save_load(jid, load):
+def save_load(jid, load, minions=None):
     '''
     Save the load to the specified jid id
     '''
@@ -213,8 +219,15 @@ def save_load(jid, load):
     cur = conn.cursor()
     sql = '''INSERT INTO jids (jid, load) VALUES (?, ?)'''
 
-    cur.execute(sql, (jid, json.dumps(load)))
+    cur.execute(sql, (jid, salt.utils.json.dumps(load)))
     _close_conn(conn)
+
+
+def save_minions(jid, minions, syndic_id=None):  # pylint: disable=unused-argument
+    '''
+    Included for API consistency
+    '''
+    pass
 
 
 def get_load(jid):
@@ -228,7 +241,7 @@ def get_load(jid):
     cur.execute(sql, (jid,))
     data = cur.fetchone()
     if data:
-        return json.loads(data)
+        return salt.utils.json.loads(data)
     _close_conn(conn)
     return {}
 
@@ -246,7 +259,7 @@ def get_jid(jid):
     ret = {}
     if data:
         for minion, full_ret in data:
-            ret[minion] = json.loads(full_ret)
+            ret[minion] = salt.utils.json.loads(full_ret)
     _close_conn(conn)
     return ret
 
@@ -270,7 +283,7 @@ def get_fun(fun):
     ret = {}
     if data:
         for minion, _, retval in data:
-            ret[minion] = json.loads(retval)
+            ret[minion] = salt.utils.json.loads(retval)
     _close_conn(conn)
     return ret
 
@@ -281,13 +294,13 @@ def get_jids():
     '''
     conn = _get_conn(ret=None)
     cur = conn.cursor()
-    sql = '''SELECT distinct jid FROM jids'''
+    sql = '''SELECT distinct jid, load FROM jids'''
 
     cur.execute(sql)
     data = cur.fetchall()
-    ret = []
-    for jid in data:
-        ret.append(jid[0])
+    ret = {}
+    for jid, load in data:
+        ret[jid] = salt.utils.jid.format_jid_instance(jid, salt.utils.json.loads(load))
     _close_conn(conn)
     return ret
 
@@ -313,4 +326,4 @@ def prep_jid(nocache=False, passed_jid=None):  # pylint: disable=unused-argument
     '''
     Do any work necessary to prepare a JID, including sending a custom id
     '''
-    return passed_jid if passed_jid is not None else salt.utils.jid.gen_jid()
+    return passed_jid if passed_jid is not None else salt.utils.jid.gen_jid(__opts__)

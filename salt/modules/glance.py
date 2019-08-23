@@ -36,26 +36,25 @@ Module for handling openstack glance calls.
 '''
 
 # Import Python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 import re
-
-# Import third party libs
-#import salt.ext.six as six
 
 # Import salt libs
 from salt.exceptions import (
-    #CommandExecutionError,
     SaltInvocationError
     )
-from salt.utils import warn_until
 
 from salt.version import (
     __version__,
     SaltStackVersion
     )
+
+from salt.ext import six
+
 # is there not SaltStackVersion.current() to get
 # the version of the salt running this code??
-CUR_VER = SaltStackVersion(__version__[0], __version__[1])
+_version_ary = __version__.split('.')
+CUR_VER = SaltStackVersion(_version_ary[0], _version_ary[1])
 BORON = SaltStackVersion.from_name('Boron')
 
 # pylint: disable=import-error
@@ -90,7 +89,7 @@ def __virtual__():
     '''
     if HAS_GLANCE:
         return 'glance'
-    return False
+    return (False, 'The glance execution module cannot be loaded: the glanceclient python library is not available.')
 
 
 __opts__ = {}
@@ -104,6 +103,13 @@ def _auth(profile=None, api_version=2, **connection_args):
 
     Only intended to be used within glance-enabled modules
     '''
+    __utils__['versions.warn_until'](
+        'Neon',
+        (
+            'The glance module has been deprecated and will be removed in {version}.  '
+            'Please update to using the glanceng module'
+        ),
+    )
 
     if profile:
         prefix = profile + ":keystone."
@@ -127,7 +133,7 @@ def _auth(profile=None, api_version=2, **connection_args):
     admin_token = get('token')
     region = get('region')
     ks_endpoint = get('endpoint', 'http://127.0.0.1:9292/')
-    g_endpoint_url = __salt__['keystone.endpoint_get']('glance')
+    g_endpoint_url = __salt__['keystone.endpoint_get']('glance', profile)
     # The trailing 'v2' causes URLs like thise one:
     # http://127.0.0.1:9292/v2/v1/images
     g_endpoint_url = re.sub('/v2', '', g_endpoint_url['internalurl'])
@@ -158,18 +164,16 @@ def _auth(profile=None, api_version=2, **connection_args):
         raise SaltInvocationError('No credentials to authenticate with.')
 
     if HAS_KEYSTONE:
-        log.debug('Calling keystoneclient.v2_0.client.Client(' +
-            '{0}, **{1})'.format(ks_endpoint, kwargs))
+        log.debug('Calling keystoneclient.v2_0.client.Client(%s, **%s)',
+                  ks_endpoint, kwargs)
         keystone = kstone.Client(**kwargs)
-        log.debug(help(keystone.get_token))
         kwargs['token'] = keystone.get_token(keystone.session)
         # This doesn't realy prevent the password to show up
         # in the minion log as keystoneclient.session is
         # logging it anyway when in debug-mode
         kwargs.pop('password')
-        log.debug('Calling glanceclient.client.Client(' +
-            '{0}, {1}, **{2})'.format(api_version,
-                g_endpoint_url, kwargs))
+        log.debug('Calling glanceclient.client.Client(%s, %s, **%s)',
+                  api_version, g_endpoint_url, kwargs)
         # may raise exc.HTTPUnauthorized, exc.HTTPNotFound
         # but we deal with those elsewhere
         return client.Client(api_version, g_endpoint_url, **kwargs)
@@ -212,9 +216,13 @@ def _add_image(collection, image):
     return collection
 
 
-def image_create(name, location=None, profile=None, visibility=None,
-        container_format='bare', disk_format='raw', protected=None,
-        copy_from=None, is_public=None):
+def image_create(name,
+                 location=None,
+                 profile=None,
+                 visibility=None,
+                 container_format='bare',
+                 disk_format='raw',
+                 protected=None,):
     '''
     Create an image (glance image-create)
 
@@ -222,22 +230,17 @@ def image_create(name, location=None, profile=None, visibility=None,
 
     .. code-block:: bash
 
-        salt '*' glance.image_create name=f16-jeos is_public=true \\
-                 disk_format=qcow2 container_format=ovf \\
-                 copy_from=http://berrange.fedorapeople.org/\
-                    images/2012-02-29/f16-x86_64-openstack-sda.qcow2
+        salt '*' glance.image_create name=f16-jeos \\
+                 disk_format=qcow2 container_format=ovf
 
     CLI Example, new format resembling Glance API v2:
 
     .. code-block:: bash
 
         salt '*' glance.image_create name=f16-jeos visibility=public \\
-                 disk_format=qcow2 container_format=ovf \\
-                 copy_from=http://berrange.fedorapeople.org/\
-                    images/2012-02-29/f16-x86_64-openstack-sda.qcow2
+                 disk_format=qcow2 container_format=ovf
 
-    The parameter 'visibility' defaults to 'public' if neither
-    'visibility' nor 'is_public' is specified.
+    The parameter 'visibility' defaults to 'public' if not specified.
     '''
     kwargs = {}
     # valid options for "visibility":
@@ -247,26 +250,9 @@ def image_create(name, location=None, profile=None, visibility=None,
     # valid options for "disk_format":
     df_list = ['ami', 'ari', 'aki', 'vhd', 'vmdk',
                'raw', 'qcow2', 'vdi', 'iso']
-    # 'location' and 'visibility' are the parameters used in
-    # Glance API v2. For now we have to use v1 for now (see below)
-    # but this modules interface will change in Carbon.
-    if copy_from is not None or is_public is not None:
-        warn_until('Carbon', 'The parameters \'copy_from\' and '
-            '\'is_public\' are deprecated and will be removed. '
-            'Use \'location\' and \'visibility\' instead.')
-    if is_public is not None and visibility is not None:
-        raise SaltInvocationError('Must only specify one of '
-            '\'is_public\' and \'visibility\'')
-    if copy_from is not None and location is not None:
-        raise SaltInvocationError('Must only specify one of '
-            '\'copy_from\' and \'location\'')
-    if copy_from is not None:
-        kwargs['copy_from'] = copy_from
-    else:
-        kwargs['copy_from'] = location
-    if is_public is not None:
-        kwargs['is_public'] = is_public
-    elif visibility is not None:
+
+    kwargs['copy_from'] = location
+    if visibility is not None:
         if visibility not in v_list:
             raise SaltInvocationError('"visibility" needs to be one ' +
                 'of the following: {0}'.format(', '.join(v_list)))
@@ -293,7 +279,7 @@ def image_create(name, location=None, profile=None, visibility=None,
     # in a usable fashion. Thus we have to use v1 for now.
     g_client = _auth(profile, api_version=1)
     image = g_client.images.create(name=name, **kwargs)
-    return image_show(image.id)
+    return image_show(image.id, profile=profile)
 
 
 def image_delete(id=None, name=None, profile=None):  # pylint: disable=C0103
@@ -332,10 +318,10 @@ def image_delete(id=None, name=None, profile=None):  # pylint: disable=C0103
             'comment': 'No image with ID {0}'.format(id)
             }
     except exc.HTTPForbidden as forbidden:
-        log.error(str(forbidden))
+        log.error(six.text_type(forbidden))
         return {
             'result': False,
-            'comment': str(forbidden)
+            'comment': six.text_type(forbidden)
             }
     return {
         'result': True,
@@ -374,26 +360,17 @@ def image_show(id=None, name=None, profile=None):  # pylint: disable=C0103
             'result': False,
             'comment': 'No image with ID {0}'.format(id)
             }
-    pformat = pprint.PrettyPrinter(indent=4).pformat
-    log.debug('Properties of image {0}:\n{1}'.format(
-        image.name, pformat(image)))
-    ret_details = {}
-    # I may want to use this code on Beryllium
-    # until we got Boron packages for Ubuntu
-    # so please keep this code until Carbon!
-    warn_until('Carbon', 'Starting with \'Boron\' image_show() '
-            'will stop wrapping the returned image in another '
-            'dictionary.')
-    if CUR_VER < BORON:
-        ret[image.name] = ret_details
-    else:
-        ret = ret_details
+    log.debug(
+        'Properties of image %s:\n%s',
+        image.name, pprint.PrettyPrinter(indent=4).pformat(image)
+    )
+
     schema = image_schema(profile=profile)
     if len(schema.keys()) == 1:
         schema = schema['image']
-    for key in schema.keys():
+    for key in schema:
         if key in image:
-            ret_details[key] = image[key]
+            ret[key] = image[key]
     return ret
 
 
@@ -407,21 +384,8 @@ def image_list(id=None, profile=None, name=None):  # pylint: disable=C0103
 
         salt '*' glance.image_list
     '''
-    #try:
     g_client = _auth(profile)
-    #except kstone_exc.Unauthorized:
-    #    return False
-    #
-    # I may want to use this code on Beryllium
-    # until we got Boron packages for Ubuntu
-    # so please keep this code until Carbon!
-    warn_until('Carbon', 'Starting in \'Boron\' image_list() '
-        'will return a list of images instead of a dictionary '
-        'keyed with the images\' names.')
-    if CUR_VER < BORON:
-        ret = {}
-    else:
-        ret = []
+    ret = []
     for image in g_client.images.list():
         if id is None and name is None:
             _add_image(ret, image)
@@ -439,7 +403,7 @@ def image_list(id=None, profile=None, name=None):  # pylint: disable=C0103
                             'name "{0}"'.format(name)
                         }
                 _add_image(ret, image)
-    log.debug('Returning images: {0}'.format(ret))
+    log.debug('Returning images: %s', ret)
     return ret
 
 
@@ -447,6 +411,12 @@ def image_schema(profile=None):
     '''
     Returns names and descriptions of the schema "image"'s
     properties for this profile's instance of glance
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' glance.image_schema
     '''
     return schema_get('image', profile)
 
@@ -458,18 +428,25 @@ def image_update(id=None, name=None, profile=None, **kwargs):  # pylint: disable
     - min_ram (in MB)
     - protected (bool)
     - visibility ('public' or 'private')
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' glance.image_update id=c2eb2eb0-53e1-4a80-b990-8ec887eae7df
+        salt '*' glance.image_update name=f16-jeos
     '''
     if id:
-        image = image_show(id=id)
+        image = image_show(id=id, profile=profile)
         if 'result' in image and not image['result']:
             return image
         elif len(image) == 1:
             image = image.values()[0]
     elif name:
-        img_list = image_list(name=name)
+        img_list = image_list(name=name, profile=profile)
         if img_list is dict and 'result' in img_list:
             return img_list
-        elif len(img_list) == 0:
+        elif not img_list:
             return {
                 'result': False,
                 'comment':
@@ -483,24 +460,16 @@ def image_update(id=None, name=None, profile=None, **kwargs):  # pylint: disable
                 image = img_list[name]
     else:
         raise SaltInvocationError
-    log.debug('Found image:\n{0}'.format(image))
+    log.debug('Found image:\n%s', image)
     to_update = {}
     for key, value in kwargs.items():
         if key.startswith('_'):
             continue
         if key not in image or image[key] != value:
-            log.debug('add <{0}={1}> to to_update'.format(key, value))
+            log.debug('add <%s=%s> to to_update', key, value)
             to_update[key] = value
     g_client = _auth(profile)
     updated = g_client.images.update(image['id'], **to_update)
-    # I may want to use this code on Beryllium
-    # until we got Boron packages for Ubuntu
-    # so please keep this code until Carbon!
-    warn_until('Carbon', 'Starting with \'Boron\' image_update() '
-            'will stop wrapping the returned, updated image in '
-            'another dictionary.')
-    if CUR_VER < BORON:
-        updated = {updated.name: updated}
     return updated
 
 
@@ -511,14 +480,21 @@ def schema_get(name, profile=None):
       - images
       - member
       - members
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' glance.schema_get name=f16-jeos
     '''
     g_client = _auth(profile)
-    pformat = pprint.PrettyPrinter(indent=4).pformat
     schema_props = {}
     for prop in g_client.schemas.get(name).properties:
         schema_props[prop.name] = prop.description
-    log.debug('Properties of schema {0}:\n{1}'.format(
-        name, pformat(schema_props)))
+    log.debug(
+        'Properties of schema %s:\n%s',
+        name, pprint.PrettyPrinter(indent=4).pformat(schema_props)
+    )
     return {name: schema_props}
 
 

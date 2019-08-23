@@ -1,3 +1,5 @@
+.. _cloud-getting-started-gce:
+
 ==========================================
 Getting Started With Google Compute Engine
 ==========================================
@@ -13,7 +15,11 @@ at https://cloud.google.com.
 
 Dependencies
 ============
-* LibCloud >= 0.14.1
+
+* LibCloud >= 1.0.0
+
+.. versionchanged:: 2017.7.0
+
 * A Google Cloud Platform account with Compute Engine enabled
 * A registered Service Account for authorization
 * Oh, and obviously you'll need `salt <https://github.com/saltstack/salt>`_
@@ -52,7 +58,7 @@ Google Compute Engine Setup
    *Service Account* and click the *Create Client ID* button. This will
    automatically download a ``.json`` file, which may or may not be used
    in later steps, depending on your version of ``libcloud``.
-   
+
    Look for a new *Service Account* section in the page and record the generated
    email address for the matching key/fingerprint. The email address will be used
    in the ``service_account_email_address`` of the ``/etc/salt/cloud.providers``
@@ -60,13 +66,13 @@ Google Compute Engine Setup
 
 #. Key Format
 
-   *If you are using ``libcloud >= 0.17.0`` it is recommended that you use the ``JSON
-   format`` file you downloaded above and skip to the `Provider Configuration`_ section
-   below, using the JSON file **_in place of 'NEW.pem'_** in the documentation.
-   
-   If you are using an older version of libcloud or are unsure of the version you 
-   have, please follow the instructions below to generate and format a new P12 key.*
- 
+   .. note:: If you are using ``libcloud >= 0.17.0`` it is recommended that you use the ``JSON
+       format`` file you downloaded above and skip to the `Provider Configuration`_ section
+       below, using the JSON file **in place of 'NEW.pem'** in the documentation.
+
+       If you are using an older version of libcloud or are unsure of the version you
+       have, please follow the instructions below to generate and format a new P12 key.
+
    In the new *Service Account* section, click *Generate new P12 key*, which
    will automatically download a ``.p12`` private key file. The ``.p12``
    private key needs to be converted to a format compatible with libcloud.
@@ -80,7 +86,7 @@ Google Compute Engine Setup
        openssl pkcs12 -in ORIG.p12 -passin pass:notasecret \
        -nodes -nocerts | openssl rsa -out NEW.pem
 
- 
+
 
 Provider Configuration
 ======================
@@ -110,6 +116,12 @@ Set up the provider cloud config at ``/etc/salt/cloud.providers`` or
 
 .. note::
 
+    Empty strings as values for ``service_account_private_key`` and ``service_account_email_address``
+    can be used on GCE instances. This will result in the service account assigned to the GCE instance
+    being used.
+
+.. note::
+
     The value provided for ``project`` must not contain underscores or spaces and
     is labeled as "Project ID" on the Google Developers Console.
 
@@ -134,6 +146,7 @@ Set up an initial profile at ``/etc/salt/cloud.profiles`` or
       size: n1-standard-1
       location: europe-west1-b
       network: default
+      subnetwork: default
       tags: '["one", "two", "three"]'
       metadata: '{"one": "1", "2": "two"}'
       use_persistent_disk: True
@@ -157,86 +170,188 @@ it can be verified with Salt:
 
 .. code-block:: bash
 
-    salt gce-instance test.ping
+    salt gce-instance test.version
 
 
 GCE Specific Settings
 =====================
 Consult the sample profile below for more information about GCE specific
-settings.  Some of them are mandatory and are properly labeled below but
+settings. Some of them are mandatory and are properly labeled below but
 typically also include a hard-coded default.
+
+Initial Profile
+---------------
+Set up an initial profile at ``/etc/salt/cloud.profiles`` or
+``/etc/salt/cloud.profiles.d/gce.conf``:
 
 .. code-block:: yaml
 
     my-gce-profile:
-
-      # Image is used to define what Operating System image should be used
-      # to for the instance.  Examples are Debian 7 (wheezy) and CentOS 6.
-      #
-      # MANDATORY
-      #
       image: centos-6
-
-      # A 'size', in GCE terms, refers to the instance's 'machine type'.  See
-      # the on-line documentation for a complete list of GCE machine types.
-      #
-      # MANDATORY
-      #
       size: n1-standard-1
-
-      # A 'location', in GCE terms, refers to the instance's 'zone'.  GCE
-      # has the notion of both Regions (e.g. us-central1, europe-west1, etc)
-      # and Zones (e.g. us-central1-a, us-central1-b, etc).
-      #
-      # MANDATORY
-      #
       location: europe-west1-b
-
-      # Use this setting to define the network resource for the instance.
-      # All GCE projects contain a network named 'default' but it's possible
-      # to use this setting to create instances belonging to a different
-      # network resource.
-      #
       network: default
-
-      # GCE supports instance/network tags and this setting allows you to
-      # set custom tags.  It should be a list of strings and must be
-      # parse-able by the python ast.literal_eval() function to convert it
-      # to a python list.
-      #
+      subnetwork: default
       tags: '["one", "two", "three"]'
-
-      # GCE supports instance metadata and this setting allows you to
-      # set custom metadata.  It should be a hash of key/value strings and
-      # parse-able by the python ast.literal_eval() function to convert it
-      # to a python dictionary.
-      #
       metadata: '{"one": "1", "2": "two"}'
-
-      # Use this setting to ensure that when new instances are created,
-      # they will use a persistent disk to preserve data between instance
-      # terminations and re-creations.
-      #
       use_persistent_disk: True
-
-      # In the event that you wish the boot persistent disk to be permanently
-      # deleted when you destroy an instance, set delete_boot_pd to True.
-      #
       delete_boot_pd: False
-
-      # Specify whether to use public or private IP for deploy script.
-      # Valid options are:
-      #     private_ips - The salt-master is also hosted with GCE
-      #     public_ips - The salt-master is hosted outside of GCE
       ssh_interface: public_ips
-
-      # Per instance setting: Used a named fixed IP address to this host.
-      # Valid options are:
-      #     ephemeral - The host will use a GCE ephemeral IP
-      #     None - No external IP will be configured on this host.
-      # Optionally, pass the name of a GCE address to use a fixed IP address.
-      # If the address does not already exist, it will be created.
       external_ip: "ephemeral"
+
+image
+-----
+
+Image is used to define what Operating System image should be used
+to for the instance. Examples are Debian 7 (wheezy) and CentOS 6. Required.
+
+size
+----
+
+A 'size', in GCE terms, refers to the instance's 'machine type'. See
+the on-line documentation for a complete list of GCE machine types. Required.
+
+location
+--------
+
+A 'location', in GCE terms, refers to the instance's 'zone'. GCE
+has the notion of both Regions (e.g. us-central1, europe-west1, etc)
+and Zones (e.g. us-central1-a, us-central1-b, etc). Required.
+
+network
+-------
+
+Use this setting to define the network resource for the instance.
+All GCE projects contain a network named 'default' but it's possible
+to use this setting to create instances belonging to a different
+network resource.
+
+subnetwork
+----------
+
+Use this setting to define the subnetwork an instance will be created in.
+This requires that the network your instance is created under has a mode of 'custom' or 'auto'.
+Additionally, the subnetwork your instance is created under is associated with the location you provide.
+
+.. versionadded:: 2017.7.0
+
+tags
+----
+
+GCE supports instance/network tags and this setting allows you to
+set custom tags. It should be a list of strings and must be
+parse-able by the python ast.literal_eval() function to convert it
+to a python list.
+
+metadata
+--------
+
+GCE supports instance metadata and this setting allows you to
+set custom metadata. It should be a hash of key/value strings and
+parse-able by the python ast.literal_eval() function to convert it
+to a python dictionary.
+
+use_persistent_disk
+-------------------
+
+Use this setting to ensure that when new instances are created,
+they will use a persistent disk to preserve data between instance
+terminations and re-creations.
+
+delete_boot_pd
+--------------
+
+In the event that you wish the boot persistent disk to be permanently
+deleted when you destroy an instance, set delete_boot_pd to True.
+
+ssh_interface
+-------------
+
+.. versionadded:: 2015.5.0
+
+Specify whether to use public or private IP for deploy script.
+
+Valid options are:
+
+- private_ips: The salt-master is also hosted with GCE
+- public_ips: The salt-master is hosted outside of GCE
+
+external_ip
+-----------
+
+Per instance setting: Used a named fixed IP address to this host.
+
+Valid options are:
+
+- ephemeral: The host will use a GCE ephemeral IP
+- None: No external IP will be configured on this host.
+
+Optionally, pass the name of a GCE address to use a fixed IP address.
+If the address does not already exist, it will be created.
+
+ex_disk_type
+------------
+
+GCE supports two different disk types, ``pd-standard`` and ``pd-ssd``.
+The default disk type setting is ``pd-standard``. To specify using an SSD
+disk, set ``pd-ssd`` as the value.
+
+.. versionadded:: 2014.7.0
+
+ip_forwarding
+-------------
+
+GCE instances can be enabled to use IP Forwarding. When set to ``True``,
+this options allows the instance to send/receive non-matching src/dst
+packets. Default is ``False``.
+
+.. versionadded:: 2015.8.1
+
+Profile with scopes
+-------------------
+
+Scopes can be specified by setting the optional ``ex_service_accounts``
+key in your cloud profile. The following example enables the bigquery scope.
+
+.. code-block:: yaml
+
+  my-gce-profile:
+   image: centos-6
+    ssh_username: salt
+    size: f1-micro
+    location: us-central1-a
+    network: default
+    subnetwork: default
+    tags: '["one", "two", "three"]'
+    metadata: '{"one": "1", "2": "two",
+                "sshKeys": ""}'
+    use_persistent_disk: True
+    delete_boot_pd: False
+    deploy: False
+    make_master: False
+    provider: gce-config
+    ex_service_accounts:
+      - scopes:
+        - bigquery
+
+
+Email can also be specified as an (optional) parameter.
+
+.. code-block:: yaml
+
+  my-gce-profile:
+  ...snip
+    ex_service_accounts:
+      - scopes:
+        - bigquery
+        email: default
+
+There can be multiple entries for scopes since ``ex-service_accounts`` accepts
+a list of dictionaries. For more information refer to the libcloud documentation
+on `specifying service account scopes`__.
+
+SSH Remote Access
+=================
 
 GCE instances do not allow remote access to the root user by default.
 Instead, another user must be used to run the deploy script using sudo.
@@ -407,19 +522,23 @@ is blocked.
 
 Create network
 --------------
-New networks require a name and CIDR range. New instances can be created
-and added to this network by setting the network name during create. It is
+New networks require a name and CIDR range if they don't have a 'mode'.
+Optionally, 'mode' can be provided. Supported modes are 'auto', 'custom', 'legacy'.
+Optionally, 'description' can be provided to add an extra note to your network.
+New instances can be created and added to this network by setting the network name during create. It is
 not possible to add/remove existing instances to a network.
 
 .. code-block:: bash
 
     salt-cloud -f create_network gce name=mynet cidr=10.10.10.0/24
+    salt-cloud -f create_network gce name=mynet mode=auto description=some optional info.
+
+.. versionchanged:: 2017.7.0
 
 Destroy network
 ---------------
-Destroy a network by specifying the name. Make sure that there are no
-instances associated with the network prior to deleting it or you'll have
-a bad day.
+Destroy a network by specifying the name. If a resource is currently using
+the target network an exception will be raised.
 
 .. code-block:: bash
 
@@ -432,6 +551,44 @@ Specify the network name to view information about the network.
 .. code-block:: bash
 
     salt-cloud -f show_network gce name=mynet
+
+Create subnetwork
+-----------------
+
+New subnetworks require a name, region, and CIDR range.
+Optionally, 'description' can be provided to add an extra note to your subnetwork.
+New instances can be created and added to this subnetwork by setting the subnetwork name during create. It is
+not possible to add/remove existing instances to a subnetwork.
+
+.. code-block:: bash
+
+    salt-cloud -f create_subnetwork gce name=mynet network=mynet region=us-central1 cidr=10.0.10.0/24
+    salt-cloud -f create_subnetwork gce name=mynet network=mynet region=us-central1 cidr=10.10.10.0/24 description=some info about my subnet.
+
+.. versionadded:: 2017.7.0
+
+Destroy subnetwork
+------------------
+
+Destroy a subnetwork by specifying the name and region. If a resource is currently using
+the target subnetwork an exception will be raised.
+
+.. code-block:: bash
+
+    salt-cloud -f delete_subnetwork gce name=mynet region=us-central1
+
+.. versionadded:: 2017.7.0
+
+Show subnetwork
+---------------
+
+Specify the subnetwork name to view information about the subnetwork.
+
+.. code-block:: bash
+
+    salt-cloud -f show_subnetwork gce name=mynet
+
+.. versionadded:: 2017.7.0
 
 Create address
 --------------
@@ -492,7 +649,7 @@ Load Balancer
 Compute Engine possess a load-balancer feature for splitting traffic across
 multiple instances. Please reference the
 `documentation <https://developers.google.com/compute/docs/load-balancing/>`_
-for a more complete discription.
+for a more complete description.
 
 The load-balancer functionality is slightly different than that described
 in Google's documentation.  The concept of *TargetPool* and *ForwardingRule*
@@ -547,3 +704,5 @@ Both the instance and load-balancer must exist before using these functions.
 
     salt-cloud -f attach_lb gce name=lb member=w4
     salt-cloud -f detach_lb gce name=lb member=oops
+
+__ https://libcloud.readthedocs.io/en/latest/compute/drivers/gce.html#specifying-service-account-scopes

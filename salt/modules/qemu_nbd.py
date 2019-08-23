@@ -7,7 +7,7 @@ are used here to build up kvm images.
 '''
 
 # Import python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 import os
 import glob
 import tempfile
@@ -15,11 +15,11 @@ import time
 import logging
 
 # Import salt libs
-import salt.utils
+import salt.utils.path
 import salt.crypt
 
 # Import 3rd-party libs
-import salt.ext.six as six
+from salt.ext import six
 
 # Set up logging
 log = logging.getLogger(__name__)
@@ -29,9 +29,9 @@ def __virtual__():
     '''
     Only load if qemu-img and qemu-nbd are installed
     '''
-    if salt.utils.which('qemu-nbd'):
+    if salt.utils.path.which('qemu-nbd'):
         return 'qemu_nbd'
-    return False
+    return (False, 'The qemu_nbd execution module cannot be loaded: the qemu-nbd binary is not in the path.')
 
 
 def connect(image):
@@ -45,12 +45,11 @@ def connect(image):
         salt '*' qemu_nbd.connect /tmp/image.raw
     '''
     if not os.path.isfile(image):
-        log.warning('Could not connect image: '
-                    '{0} does not exist'.format(image))
+        log.warning('Could not connect image: %s does not exist', image)
         return ''
 
-    if salt.utils.which('cfdisk'):
-        fdisk = 'cfdisk -P t'
+    if salt.utils.path.which('sfdisk'):
+        fdisk = 'sfdisk -d'
     else:
         fdisk = 'fdisk -l'
     __salt__['cmd.run']('modprobe nbd max_part=63')
@@ -65,12 +64,11 @@ def connect(image):
                 if not __salt__['cmd.retcode']('{0} {1}'.format(fdisk, nbd)):
                     break
             return nbd
-    log.warning('Could not connect image: '
-                '{0}'.format(image))
+    log.warning('Could not connect image: %s', image)
     return ''
 
 
-def mount(nbd):
+def mount(nbd, root=None):
     '''
     Pass in the nbd connection device location, mount all partitions and return
     a dict of mount points
@@ -86,11 +84,13 @@ def mount(nbd):
             python_shell=False,
             )
     ret = {}
-    for part in glob.glob('{0}p*'.format(nbd)):
+    if root is None:
         root = os.path.join(
-                tempfile.gettempdir(),
-                'nbd',
-                os.path.basename(nbd))
+            tempfile.gettempdir(),
+            'nbd',
+            os.path.basename(nbd)
+        )
+    for part in glob.glob('{0}p*'.format(nbd)):
         m_pt = os.path.join(root, os.path.basename(part))
         time.sleep(1)
         mnt = __salt__['mount.mount'](m_pt, part, True)
@@ -100,7 +100,7 @@ def mount(nbd):
     return ret
 
 
-def init(image):
+def init(image, root=None):
     '''
     Mount the named image via qemu-nbd and return the mounted roots
 
@@ -113,7 +113,7 @@ def init(image):
     nbd = connect(image)
     if not nbd:
         return ''
-    return mount(nbd)
+    return mount(nbd, root)
 
 
 def clear(mnt):

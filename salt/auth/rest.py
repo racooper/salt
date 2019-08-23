@@ -2,7 +2,7 @@
 '''
 Provide authentication using a REST call
 
-Django auth can be defined like any other eauth module:
+REST auth can be defined like any other eauth module:
 
 .. code-block:: yaml
 
@@ -24,7 +24,7 @@ as above.
 '''
 
 # Import python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 import logging
 
 # Import salt libs
@@ -32,7 +32,7 @@ import salt.utils.http
 
 log = logging.getLogger(__name__)
 
-__virtualname__ = 'django'
+__virtualname__ = 'rest'
 
 
 def __virtual__():
@@ -56,13 +56,15 @@ def auth(username, password):
 
     data = {'username': username, 'password': password}
 
-    # Post to the API endpoint.  If 200 is returned then the result will be the ACLs
+    # Post to the API endpoint. If 200 is returned then the result will be the ACLs
     # for this user
-    result = salt.utils.http.query(url, method='POST', data=data)
+    result = salt.utils.http.query(url, method='POST', data=data, status=True,
+                                   decode=True)
     if result['status'] == 200:
-        log.debug('eauth REST call returned 200: {0}'.format(result))
-        __opts__['external_auth']['rest'][username] = result['dict']
+        log.debug('eauth REST call returned 200: %s', result)
+        if result['dict'] is not None:
+            return result['dict']
         return True
     else:
-        log.debug('eauth REST call failed: {0}'.format(result))
+        log.debug('eauth REST call failed: %s', result)
         return False

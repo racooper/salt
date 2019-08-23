@@ -7,7 +7,11 @@ Developing Salt
     :glob:
 
     *
-    tests/index
-    raet/index
+    modules/index
+    extend/index
+    tests/*
     git/index
     conventions/index
+    ../../ref/internals/index
+    ../projects/index
+    ../tutorials/writing_tests

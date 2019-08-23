@@ -1,9 +1,27 @@
 # -*- coding: utf-8 -*-
 '''
 Pure python state renderer
+==========================
 
-The SLS file should contain a function called ``run`` which returns high state
-data.
+To use this renderer, the SLS file should contain a function called ``run``
+which returns highstate data.
+
+The highstate data is a dictionary containing identifiers as keys, and execution
+dictionaries as values. For example the following state declaration in YAML:
+
+.. code-block:: yaml
+
+    common_packages:
+      pkg.installed:
+       - pkgs:
+          - curl
+          - vim
+
+translates to:
+
+.. code-block:: python
+
+     {'common_packages': {'pkg.installed': [{'pkgs': ['curl', 'vim']}]}}
 
 In this module, a few objects are defined for you, giving access to Salt's
 execution functions, grains, pillar, etc. They are:
@@ -18,7 +36,8 @@ execution functions, grains, pillar, etc. They are:
   python SLS file. To use a different environment, the environment should be
   set when executing the state. This can be done in a couple different ways:
 
-  - Using the ``saltenv`` argument on the salt CLI (i.e. ``salt '*' state.sls foo.bar.baz saltenv=env_name``).
+  - Using the ``saltenv`` argument on the salt CLI (i.e. ``salt '*' state.sls
+    foo.bar.baz saltenv=env_name``).
   - By adding a ``saltenv`` argument to an individual state within the SLS
     file. In other words, adding a line like this to the state's data
     structure: ``{'saltenv': 'env_name'}``
@@ -28,6 +47,26 @@ execution functions, grains, pillar, etc. They are:
   ``/srv/salt/foo/bar/baz.sls``, then ``__sls__`` in that file will be
   ``foo.bar.baz``.
 
+When writing a reactor SLS file the global context ``data`` (same as context ``{{ data }}``
+for states written with Jinja + YAML) is available. The following YAML + Jinja state declaration:
+
+.. code-block:: jinja
+
+    {% if data['id'] == 'mysql1' %}
+    highstate_run:
+      local.state.apply:
+        - tgt: mysql1
+    {% endif %}
+
+translates to:
+
+.. code-block:: python
+
+    if data['id'] == 'mysql1':
+        return {'highstate_run': {'local.state.apply': [{'tgt': 'mysql1'}]}}
+
+Full Example
+------------
 
 .. code-block:: python
    :linenos:
@@ -71,7 +110,7 @@ execution functions, grains, pillar, etc. They are:
         return config
 
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import python libs
 import os

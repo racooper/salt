@@ -1,41 +1,85 @@
 # -*- coding: utf-8 -*-
 '''
-Service support for the REST example
+Provide the service module for the proxy-minion REST sample
 '''
-from __future__ import absolute_import
-
-# Import python libs
+# Import Python libs
+from __future__ import absolute_import, unicode_literals, print_function
 import logging
+import fnmatch
+import re
+
+# Import Salt libs
+import salt.utils.platform
 
 log = logging.getLogger(__name__)
 
-__proxyenabled__ = ['rest_sample']
-# Define the module's virtual name
-__virtualname__ = 'service'
-
-# Don't shadow built-ins.
 __func_alias__ = {
     'list_': 'list'
 }
 
 
+# Define the module's virtual name
+__virtualname__ = 'service'
+
+
 def __virtual__():
     '''
-    Only work on RestExampleOS
+    Only work on systems that are a proxy minion
     '''
-    # Enable on these platforms only.
-    enable = set((
-        'RestExampleOS',
-        'proxy',
-    ))
-    if __grains__['os'] in enable:
-        return __virtualname__
-    return False
+    try:
+        if salt.utils.platform.is_proxy() \
+                and __opts__['proxy']['proxytype'] == 'rest_sample':
+            return __virtualname__
+    except KeyError:
+        return (
+            False,
+            'The rest_service execution module failed to load. Check the '
+            'proxy key in pillar.'
+        )
+
+    return (
+        False,
+        'The rest_service execution module failed to load: only works on a '
+        'rest_sample proxy minion.'
+    )
 
 
-def start(name):
+def get_all():
     '''
-    Start the specified service
+    Return a list of all available services
+
+    .. versionadded:: 2015.8.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' service.get_all
+    '''
+    proxy_fn = 'rest_sample.service_list'
+    return __proxy__[proxy_fn]()
+
+
+def list_():
+    '''
+    Return a list of all available services.
+
+    .. versionadded: 2015.8.1
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' service.list
+    '''
+    return get_all()
+
+
+def start(name, sig=None):
+    '''
+    Start the specified service on the rest_sample
+
+    .. versionadded:: 2015.8.0
 
     CLI Example:
 
@@ -43,12 +87,16 @@ def start(name):
 
         salt '*' service.start <service name>
     '''
-    return __opts__['proxymodule']['rest_sample.service_start'](name)
+
+    proxy_fn = 'rest_sample.service_start'
+    return __proxy__[proxy_fn](name)
 
 
-def stop(name):
+def stop(name, sig=None):
     '''
-    Stop the specified service
+    Stop the specified service on the rest_sample
+
+    .. versionadded:: 2015.8.0
 
     CLI Example:
 
@@ -56,12 +104,15 @@ def stop(name):
 
         salt '*' service.stop <service name>
     '''
-    return __opts__['proxymodule']['rest_sample.service_stop'](name)
+    proxy_fn = 'rest_sample.service_stop'
+    return __proxy__[proxy_fn](name)
 
 
-def restart(name):
+def restart(name, sig=None):
     '''
-    Restart the named service
+    Restart the specified service with rest_sample
+
+    .. versionadded:: 2015.8.0
 
     CLI Example:
 
@@ -70,13 +121,28 @@ def restart(name):
         salt '*' service.restart <service name>
     '''
 
-    return __opts__['proxymodule']['rest_sample.service_restart'](name)
+    proxy_fn = 'rest_sample.service_restart'
+    return __proxy__[proxy_fn](name)
 
 
-def status(name):
+def status(name, sig=None):
     '''
-    Return the status for a service, returns a bool whether the service is
-    running.
+    Return the status for a service via rest_sample.
+    If the name contains globbing, a dict mapping service name to True/False
+    values is returned.
+
+    .. versionadded:: 2015.8.0
+
+    .. versionchanged:: 2018.3.0
+        The service name can now be a glob (e.g. ``salt*``)
+
+    Args:
+        name (str): The name of the service to check
+        sig (str): Not implemented
+
+    Returns:
+        bool: True if running, False otherwise
+        dict: Maps service name to True if running, False otherwise
 
     CLI Example:
 
@@ -84,17 +150,40 @@ def status(name):
 
         salt '*' service.status <service name>
     '''
-    return __opts__['proxymodule']['rest_sample.service_status'](name)
+
+    proxy_fn = 'rest_sample.service_status'
+    contains_globbing = bool(re.search(r'\*|\?|\[.+\]', name))
+    if contains_globbing:
+        services = fnmatch.filter(get_all(), name)
+    else:
+        services = [name]
+    results = {}
+    for service in services:
+        resp = __proxy__[proxy_fn](service)
+        if resp['comment'] == 'running':
+            results[service] = True
+        else:
+            results[service] = False
+    if contains_globbing:
+        return results
+    return results[name]
 
 
-def list_():
+def running(name, sig=None):
     '''
-    List services.
+    Return whether this service is running.
 
-    CLI Example:
+    .. versionadded:: 2015.8.0
 
-    .. code-block:: bash
-
-        salt '*' service.list <service name>
     '''
-    return __opts__['proxymodule']['rest_sample.service_list']()
+    return status(name).get(name, False)
+
+
+def enabled(name, sig=None):
+    '''
+    Only the 'redbull' service is 'enabled' in the test
+
+    .. versionadded:: 2015.8.1
+
+    '''
+    return name == 'redbull'

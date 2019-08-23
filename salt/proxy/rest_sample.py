@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 '''
 This is a simple proxy-minion designed to connect to and communicate with
-the bottle-based web service contained in https://github.com/salt-contrib/proxyminion_rest_example
+the bottle-based web service contained in https://github.com/saltstack/salt-contrib/tree/master/proxyminion_rest_example
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import python libs
 import logging
@@ -33,13 +33,14 @@ def __virtual__():
     log.debug('rest_sample proxy __virtual__() called...')
     return True
 
+# Every proxy module needs an 'init', though you can
+# just put DETAILS['initialized'] = True here if nothing
+# else needs to be done.
+
 
 def init(opts):
-    '''
-    Every proxy module needs an 'init', though you can
-    just put a 'pass' here if it doesn't need to do anything.
-    '''
     log.debug('rest_sample proxy init() called...')
+    DETAILS['initialized'] = True
 
     # Save the REST URL
     DETAILS['url'] = opts['proxy']['url']
@@ -49,22 +50,53 @@ def init(opts):
         DETAILS['url'] += '/'
 
 
+def initialized():
+    '''
+    Since grains are loaded in many different places and some of those
+    places occur before the proxy can be initialized, return whether
+    our init() function has been called
+    '''
+    return DETAILS.get('initialized', False)
+
+
+def alive(opts):
+    log.debug('=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-')
+    log.debug('proxys alive() fn called')
+    log.debug('=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-')
+    return ping()
+
+
+def id(opts):
+    '''
+    Return a unique ID for this proxy minion.  This ID MUST NOT CHANGE.
+    If it changes while the proxy is running the salt-master will get
+    really confused and may stop talking to this minion
+    '''
+    r = salt.utils.http.query(opts['proxy']['url']+'id', decode_type='json', decode=True)
+    return r['dict']['id'].encode('ascii', 'ignore')
+
+
 def grains():
     '''
     Get the grains from the proxied device
     '''
-    if not GRAINS_CACHE:
+    if not DETAILS.get('grains_cache', {}):
         r = salt.utils.http.query(DETAILS['url']+'info', decode_type='json', decode=True)
-        GRAINS_CACHE = r['dict']
-    return GRAINS_CACHE
+        DETAILS['grains_cache'] = r['dict']
+    return DETAILS['grains_cache']
 
 
 def grains_refresh():
     '''
     Refresh the grains from the proxied device
     '''
-    GRAINS_CACHE = {}
+    DETAILS['grains_cache'] = None
     return grains()
+
+
+def fns():
+    return {'details': 'This key is here because a function in '
+                       'grains/rest_sample.py called fns() here in the proxymodule.'}
 
 
 def service_start(name):
@@ -120,11 +152,25 @@ def package_install(name, **kwargs):
     Install a "package" on the REST server
     '''
     cmd = DETAILS['url']+'package/install/'+name
-    if 'version' in kwargs:
+    if kwargs.get('version', False):
         cmd += '/'+kwargs['version']
     else:
         cmd += '/1.0'
     r = salt.utils.http.query(cmd, decode_type='json', decode=True)
+    return r['dict']
+
+
+def fix_outage():
+    r = salt.utils.http.query(DETAILS['url']+'fix_outage')
+    return r
+
+
+def uptodate(name):
+
+    '''
+    Call the REST endpoint to see if the packages on the "server" are up to date.
+    '''
+    r = salt.utils.http.query(DETAILS['url']+'package/remove/'+name, decode_type='json', decode=True)
     return r['dict']
 
 
@@ -161,3 +207,12 @@ def shutdown(opts):
     For this proxy shutdown is a no-op
     '''
     log.debug('rest_sample proxy shutdown() called...')
+
+
+def test_from_state():
+    '''
+    Test function so we have something to call from a state
+    :return:
+    '''
+    log.debug('test_from_state called')
+    return 'testvalue'

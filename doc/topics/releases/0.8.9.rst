@@ -17,11 +17,7 @@ date has been filled in.
 Download!
 ---------
 
-The Salt source can be downloaded from the salt GitHub site:
-
-:download:`salt-0.8.9.tar.gz`
-
-Or from PyPI:
+The Salt source can be downloaded from PyPI:
 
 https://pypi.python.org/packages/source/s/salt/salt-0.8.9.tar.gz
 
@@ -42,7 +38,7 @@ A big feature is the addition of Salt run, the ``salt-run`` command allows for
 master side execution modules to be made that gather specific information or
 execute custom routines from the master.
 
-Documentation for salt-run can be found :doc:`here </ref/runners/index>`
+Documentation for salt-run can be found :ref:`here <runners>`
 
 Refined Outputters
 ``````````````````
@@ -59,7 +55,7 @@ Cross Calling Salt Modules
 
 Salt modules can now call each other, the ``__salt__`` dict has been added to
 the predefined references in minion modules. This new feature is documented in
-the :doc:`modules documentation </ref/modules/index>`.
+the :ref:`modules documentation <writing-execution-modules>`.
 
 Watch Option Added to Salt State System
 ````````````````````````````````````````

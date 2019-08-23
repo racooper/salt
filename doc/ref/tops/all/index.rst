@@ -1,8 +1,8 @@
 .. _all-salt.tops:
 
-========================================
-Full list of builtin master tops modules
-========================================
+===================
+master tops modules
+===================
 
 .. currentmodule:: salt.tops
 
@@ -14,3 +14,5 @@ Full list of builtin master tops modules
     ext_nodes
     mongo
     reclass_adapter
+    saltclass
+    varstack_top

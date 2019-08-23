@@ -3,11 +3,12 @@
 the locale utils used by salt
 '''
 
-from __future__ import absolute_import
-
+# Import Python libs
+from __future__ import absolute_import, unicode_literals
 import sys
 
-import salt.utils
+# Import Salt libs
+import salt.utils.versions
 from salt.utils.decorators import memoize as real_memoize
 
 
@@ -33,21 +34,25 @@ def get_encodings():
 
 
 def sdecode(string_):
-    '''
-    Since we don't know where a string is coming from and that string will
-    need to be safely decoded, this function will attempt to decode the string
-    until if has a working string that does not stack trace
-    '''
-    encodings = get_encodings()
-    for encoding in encodings:
-        try:
-            decoded = salt.utils.to_unicode(string_, encoding)
-            # Make sure unicode string ops work
-            u' ' + decoded  # pylint: disable=W0104
-            return decoded
-        except UnicodeDecodeError:
-            continue
-    return string_
+    salt.utils.versions.warn_until(
+        'Sodium',
+        'Use of \'salt.utils.locales.sdecode\' detected. This function '
+        'has been replaced by \'salt.utils.data.decode\' as of '
+        'Salt 2019.2.0. This warning will be removed in Salt Sodium.',
+        stacklevel=3
+    )
+    return salt.utils.data.decode(string_)
+
+
+def sdecode_if_string(value_):
+    salt.utils.versions.warn_until(
+        'Sodium',
+        'Use of \'salt.utils.locales.sdecode_if_string\' detected. This '
+        'function has been replaced by \'salt.utils.data.decode\' as of '
+        'Salt 2019.2.0. This warning will be removed in Salt Sodium.',
+        stacklevel=3
+    )
+    return salt.utils.data.decode(value_)
 
 
 def split_locale(loc):

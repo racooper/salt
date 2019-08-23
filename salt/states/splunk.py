@@ -2,7 +2,7 @@
 '''
 Splunk User State Module
 
-.. versionadded:: Boron.
+.. versionadded:: 2016.3.0.
 
 This state is used to ensure presence of users in splunk.
 
@@ -13,6 +13,7 @@ This state is used to ensure presence of users in splunk.
             - name: 'Example TestUser1'
             - email: example@domain.com
 '''
+from __future__ import absolute_import, unicode_literals, print_function
 
 
 def __virtual__():

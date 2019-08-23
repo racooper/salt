@@ -5,7 +5,7 @@ Writing Salt Documentation
 ==========================
 
 Salt's documentation is built using the `Sphinx`_ documentation system. It can
-be build in a large variety of output formats including HTML, PDF, ePub, and
+be built in a large variety of output formats including HTML, PDF, ePub, and
 manpage.
 
 All the documentation is contained in the main Salt repository. Speaking
@@ -13,7 +13,7 @@ broadly, most of the narrative documentation is contained within the
 :blob:`doc` subdirectory and most of the reference and API documentation is
 written inline with Salt's Python code and extracted using a Sphinx extension.
 
-.. _`Sphinx`: http://sphinx-doc.org/
+.. _`Sphinx`: https://www.sphinx-doc.org/en/master/
 
 
 .. _docs-style:
@@ -72,7 +72,7 @@ Serial Commas
 
 According to Wikipedia: In English punctuation, a serial comma or series comma
 (also called Oxford comma and Harvard comma) is a comma placed immediately
-before the coordinating conjunction (usually and, or, or nor) in a series of
+before the coordinating conjunction (usually "and", "or", or "nor") in a series of
 three or more terms. For example, a list of three countries might be punctuated
 either as "France, Italy, and Spain" (with the serial comma), or as "France,
 Italy and Spain" (without the serial comma)."
@@ -96,7 +96,7 @@ code and can contain special formatting. For example:
 
 .. code-block:: python
 
-    def myfunction(value):
+    def my_function(value):
         '''
         Upper-case the given value
 
@@ -121,7 +121,7 @@ denotes what Salt release will be affected. For example:
 
 .. code-block:: python
 
-    def myfunction(value):
+    def my_function(value):
         '''
         Upper-case the given value
 
@@ -135,11 +135,11 @@ For changes to a function:
 
 .. code-block:: python
 
-    def myfunction(value, strip=False):
+    def my_function(value, strip=False):
         '''
         Upper-case the given value
 
-        .. versionchanged:: Boron
+        .. versionchanged:: 2016.3.0
             Added a flag to also strip whitespace from the string.
 
         <...snip...>
@@ -187,7 +187,7 @@ Link to :ref:`glossary entries <glossary>` using the `term role`_. A
 cross-reference should be added the first time a Salt-specific term is used in
 a document.
 
-.. _`term role`: http://sphinx-doc.org/markup/inline.html#role-term
+.. _`term role`: https://www.sphinx-doc.org/en/master/glossary.html#term-role
 
 .. code-block:: restructuredtext
 
@@ -200,13 +200,13 @@ a document.
 Index entries
 -------------
 
-Sphinx automatically generates many kind of index entries but it is
+Sphinx automatically generates many kinds of index entries, but it is
 occasionally useful to manually add items to the index.
 
 One method is to use the `index directive`_ above the document or section that
 should appear in the index.
 
-.. _`index directive`: http://sphinx-doc.org/markup/misc.html#directive-index
+.. _`index directive`: https://www.sphinx-doc.org/en/master/usage/restructuredtext/directives.html?highlight=index%20directive#index-generating-markup
 
 .. code-block:: restructuredtext
 
@@ -217,7 +217,7 @@ Another method is to use the `index role`_ inline with the text that should
 appear in the index. The index entry is created and the target text is left
 otherwise intact.
 
-.. _`index role`: http://sphinx-doc.org/markup/misc.html#role-index
+.. _`index role`: http://www.sphinx-doc.org/en/master/usage/restructuredtext/basics.html#role-index
 
 .. code-block:: restructuredtext
 
@@ -252,7 +252,7 @@ to survive document renames or movement.
 
 Note, the ``:doc:`` role should *not* be used to link documents together.
 
-.. _`ref role`: http://sphinx-doc.org/markup/inline.html#role-ref
+.. _`ref role`: https://www.sphinx-doc.org/en/master/usage/restructuredtext/roles.html#role-ref
 
 
 .. _docs-ref-modules:
@@ -298,6 +298,26 @@ cross-referenced using two custom roles, ``conf_master``, and ``conf_minion``.
     single minion.
 
 
+.. _docs-ref-fixes:
+
+Documentation Changes and Fixes
+===============================
+
+Documentation changes and fixes should be made against the earliest supported
+release branch that the update applies to. The practice of updating a release
+branch instead of making all documentation changes against Salt's main, default
+branch, ``develop``, is necessary in order for the docs to be as up-to-date as
+possible when the docs are built.
+
+The workflow mentioned above is also in line with the recommendations outlined
+in Salt's :ref:`contributing` page. You can read more about how to choose where
+to submit documentation fixes by reading the :ref:`which-salt-branch` section.
+
+For an explanation of how to submit changes against various branches, see the
+:ref:`github-pull-request` section. Specifically, see the section describing
+how to ``Create a new branch`` and the steps that follow.
+
+
 .. _docs-building:
 
 Building the documentation
@@ -317,11 +337,20 @@ Building the documentation
 3.  The generated documentation will be written to the ``doc/_build/<format>``
     directory.
 
-4.  A useful method of viewing the HTML documentation locally is the start
+4.  A useful method of viewing the HTML documentation locally is to start
     Python's built-in HTTP server:
 
+    Python 3:
+    
     .. code-block:: bash
+		    
+        cd /path/to/salt/doc/_build/html
+	python3 -m http.server
 
+    Python 2:
+    
+    .. code-block:: bash
+		    
         cd /path/to/salt/doc/_build/html
         python -m SimpleHTTPServer
 

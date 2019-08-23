@@ -4,7 +4,7 @@ The function cache system allows for data to be stored on the master so it can b
 '''
 
 # Import python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 import copy
 import logging
 import time
@@ -13,13 +13,14 @@ import traceback
 # Import salt libs
 import salt.crypt
 import salt.payload
-import salt.utils
-import salt.utils.network
+import salt.utils.args
 import salt.utils.event
+import salt.utils.network
+import salt.transport.client
 from salt.exceptions import SaltClientError
 
 # Import 3rd-party libs
-import salt.ext.six as six
+from salt.ext import six
 
 MINE_INTERNAL_KEYWORDS = frozenset([
     '__pub_user',
@@ -51,8 +52,7 @@ def _auth():
 
 def _mine_function_available(func):
     if func not in __salt__:
-        log.error('Function {0} in mine_functions not available'
-                 .format(func))
+        log.error('Function %s in mine_functions not available', func)
         return False
     return True
 
@@ -67,24 +67,27 @@ def _mine_send(load, opts):
 
 
 def _mine_get(load, opts):
-    if opts.get('transport', '') == 'zeromq':
+    if opts.get('transport', '') in ('zeromq', 'tcp'):
         try:
-            load['tok'] = _auth().gen_token('salt')
+            load['tok'] = _auth().gen_token(b'salt')
         except AttributeError:
             log.error('Mine could not authenticate with master. '
-                      'Mine could not be retreived.'
+                      'Mine could not be retrieved.'
                       )
             return False
-    channel = salt.transport.Channel.factory(opts)
-    ret = channel.send(load)
+    channel = salt.transport.client.ReqChannel.factory(opts)
+    try:
+        ret = channel.send(load)
+    finally:
+        channel.close()
     return ret
 
 
-def update(clear=False):
+def update(clear=False, mine_functions=None):
     '''
-    Execute the configured functions and send the data back up to the master
+    Execute the configured functions and send the data back up to the master.
     The functions to be executed are merged from the master config, pillar and
-    minion config under the option "function_cache":
+    minion config under the option `mine_functions`:
 
     .. code-block:: yaml
 
@@ -92,6 +95,34 @@ def update(clear=False):
           network.ip_addrs:
             - eth0
           disk.usage: []
+
+    This function accepts the following arguments:
+
+    clear: False
+        Boolean flag specifying whether updating will clear the existing
+        mines, or will update. Default: `False` (update).
+
+    mine_functions
+        Update the mine data on certain functions only.
+        This feature can be used when updating the mine for functions
+        that require refresh at different intervals than the rest of
+        the functions specified under `mine_functions` in the
+        minion/master config or pillar.
+        A potential use would be together with the `scheduler`, for example:
+
+        .. code-block:: yaml
+
+            schedule:
+              lldp_mine_update:
+                function: mine.update
+                kwargs:
+                    mine_functions:
+                      net.lldp: []
+                hours: 12
+
+        In the example above, the mine for `net.lldp` would be refreshed
+        every 12 hours, while  `network.ip_addrs` would continue to be updated
+        as specified in `mine_interval`.
 
     The function cache will be populated with information from executing these
     functions
@@ -102,7 +133,19 @@ def update(clear=False):
 
         salt '*' mine.update
     '''
-    m_data = __salt__['config.option']('mine_functions', {})
+    m_data = {}
+    if not mine_functions:
+        m_data = __salt__['config.merge']('mine_functions', {})
+        # If we don't have any mine functions configured, then we should just bail out
+        if not m_data:
+            return
+    elif mine_functions and isinstance(mine_functions, list):
+        m_data = dict((fun, {}) for fun in mine_functions)
+    elif mine_functions and isinstance(mine_functions, dict):
+        m_data = mine_functions
+    else:
+        return
+
     data = {}
     for func in m_data:
         try:
@@ -126,13 +169,12 @@ def update(clear=False):
                 data[func] = __salt__[func]()
         except Exception:
             trace = traceback.format_exc()
-            log.error('Function {0} in mine_functions failed to execute'
-                      .format(func))
-            log.debug('Error: {0}'.format(trace))
+            log.error('Function %s in mine_functions failed to execute', func)
+            log.debug('Error: %s', trace)
             continue
     if __opts__['file_client'] == 'local':
         if not clear:
-            old = __salt__['data.getval']('mine_cache')
+            old = __salt__['data.get']('mine_cache')
             if isinstance(old, dict):
                 old.update(data)
                 data = old
@@ -157,12 +199,12 @@ def send(func, *args, **kwargs):
         salt '*' mine.send network.ip_addrs eth0
         salt '*' mine.send eth0_ip_addrs mine_function=network.ip_addrs eth0
     '''
-    kwargs = salt.utils.clean_kwargs(**kwargs)
+    kwargs = salt.utils.args.clean_kwargs(**kwargs)
     mine_func = kwargs.pop('mine_function', func)
     if mine_func not in __salt__:
         return False
     data = {}
-    arg_data = salt.utils.arg_lookup(__salt__[mine_func])
+    arg_data = salt.utils.args.arg_lookup(__salt__[mine_func])
     func_data = copy.deepcopy(kwargs)
     for ind, _ in enumerate(arg_data.get('args', [])):
         try:
@@ -170,9 +212,10 @@ def send(func, *args, **kwargs):
         except IndexError:
             # Safe error, arg may be in kwargs
             pass
-    f_call = salt.utils.format_call(__salt__[mine_func],
-                                    func_data,
-                                    expected_extra_kws=MINE_INTERNAL_KEYWORDS)
+    f_call = salt.utils.args.format_call(
+        __salt__[mine_func],
+        func_data,
+        expected_extra_kws=MINE_INTERNAL_KEYWORDS)
     for arg in args:
         if arg not in f_call['args']:
             f_call['args'].append(arg)
@@ -182,11 +225,11 @@ def send(func, *args, **kwargs):
         else:
             data[func] = __salt__[mine_func](*f_call['args'])
     except Exception as exc:
-        log.error('Function {0} in mine.send failed to execute: {1}'
-                  .format(mine_func, exc))
+        log.error('Function %s in mine.send failed to execute: %s',
+                  mine_func, exc)
         return False
     if __opts__['file_client'] == 'local':
-        old = __salt__['data.getval']('mine_cache')
+        old = __salt__['data.get']('mine_cache')
         if isinstance(old, dict):
             old.update(data)
             data = old
@@ -199,42 +242,50 @@ def send(func, *args, **kwargs):
     return _mine_send(load, __opts__)
 
 
-def get(tgt, fun, expr_form='glob'):
+def get(tgt,
+        fun,
+        tgt_type='glob',
+        exclude_minion=False):
     '''
-    Get data from the mine based on the target, function and expr_form
+    Get data from the mine based on the target, function and tgt_type
 
     Targets can be matched based on any standard matching system that can be
-    matched on the master via these keywords::
+    matched on the master via these keywords:
 
-        glob
-        pcre
-        grain
-        grain_pcre
-        compound
-        pillar
-        pillar_pcre
+    - glob
+    - pcre
+    - grain
+    - grain_pcre
+    - compound
+    - pillar
+    - pillar_pcre
 
     Note that all pillar matches, whether using the compound matching system or
     the pillar matching system, will be exact matches, with globbing disabled.
+
+    exclude_minion
+        Excludes the current minion from the result set
 
     CLI Example:
 
     .. code-block:: bash
 
         salt '*' mine.get '*' network.interfaces
+        salt '*' mine.get '*' network.interfaces,network.ipaddrs
+        salt '*' mine.get '*' '["network.interfaces", "network.ipaddrs"]'
         salt '*' mine.get 'os:Fedora' network.interfaces grain
-        salt '*' mine.get 'os:Fedora and S@192.168.5.0/24' network.ipaddrs compound
+        salt '*' mine.get 'G@os:Fedora and S@192.168.5.0/24' network.ipaddrs compound
 
     .. seealso:: Retrieving Mine data from Pillar and Orchestrate
 
         This execution module is intended to be executed on minions.
         Master-side operations such as Pillar or Orchestrate that require Mine
         data should use the :py:mod:`Mine Runner module <salt.runners.mine>`
-        instead; it can be invoked from an SLS file using the
+        instead; it can be invoked from a Pillar SLS file using the
         :py:func:`saltutil.runner <salt.modules.saltutil.runner>` module. For
         example:
 
-        .. code-block:: yaml
+        .. code-block:: jinja
 
             {% set minion_ips = salt.saltutil.runner('mine.get',
                 tgt='*',
@@ -252,20 +303,40 @@ def get(tgt, fun, expr_form='glob'):
                      'compound': __salt__['match.compound'],
                      'pillar': __salt__['match.pillar'],
                      'pillar_pcre': __salt__['match.pillar_pcre'],
-                     }[expr_form](tgt)
+                     }[tgt_type](tgt)
         if is_target:
-            data = __salt__['data.getval']('mine_cache')
-            if isinstance(data, dict) and fun in data:
-                ret[__opts__['id']] = data[fun]
+            data = __salt__['data.get']('mine_cache')
+
+            if isinstance(data, dict):
+                if isinstance(fun, six.string_types):
+                    functions = list(set(fun.split(',')))
+                    _ret_dict = len(functions) > 1
+                elif isinstance(fun, list):
+                    functions = fun
+                    _ret_dict = True
+                else:
+                    return {}
+
+                if not _ret_dict and functions and functions[0] in data:
+                    ret[__opts__['id']] = data.get(functions)
+                elif _ret_dict:
+                    for fun in functions:
+                        if fun in data:
+                            ret.setdefault(fun, {})[__opts__['id']] = data.get(fun)
+
         return ret
     load = {
             'cmd': '_mine_get',
             'id': __opts__['id'],
             'tgt': tgt,
             'fun': fun,
-            'expr_form': expr_form,
+            'tgt_type': tgt_type,
     }
-    return _mine_get(load, __opts__)
+    ret = _mine_get(load, __opts__)
+    if exclude_minion:
+        if __opts__['id'] in ret:
+            del ret[__opts__['id']]
+    return ret
 
 
 def delete(fun):
@@ -279,7 +350,7 @@ def delete(fun):
         salt '*' mine.delete 'network.interfaces'
     '''
     if __opts__['file_client'] == 'local':
-        data = __salt__['data.getval']('mine_cache')
+        data = __salt__['data.get']('mine_cache')
         if isinstance(data, dict) and fun in data:
             del data[fun]
         return __salt__['data.update']('mine_cache', data)
@@ -310,12 +381,26 @@ def flush():
     return _mine_send(load, __opts__)
 
 
-def get_docker(interfaces=None, cidrs=None):
+def get_docker(interfaces=None, cidrs=None, with_container_id=False):
     '''
-    Get all mine data for 'docker.get_containers' and run an aggregation
-    routine. The "interfaces" parameter allows for specifying which network
-    interfaces to select ip addresses from. The "cidrs" parameter allows for
-    specifying a list of cidrs which the ip address must match.
+    .. versionchanged:: 2017.7.8,2018.3.3
+        When :conf_minion:`docker.update_mine` is set to ``False`` for a given
+        minion, no mine data will be populated for that minion, and thus none
+        will be returned for it.
+    .. versionchanged:: 2019.2.0
+        :conf_minion:`docker.update_mine` now defaults to ``False``
+
+    Get all mine data for :py:func:`docker.ps <salt.modules.dockermod.ps_>` and
+    run an aggregation routine. The ``interfaces`` parameter allows for
+    specifying the network interfaces from which to select IP addresses. The
+    ``cidrs`` parameter allows for specifying a list of subnets which the IP
+    address must match.
+
+    with_container_id
+        Boolean, to expose container_id in the list of results
+
+        .. versionadded:: 2015.8.2
+
 
     CLI Example:
 
@@ -339,7 +424,7 @@ def get_docker(interfaces=None, cidrs=None):
         cidrs = cidr_
 
     # Get docker info
-    cmd = 'dockerng.ps'
+    cmd = 'docker.ps'
     docker_hosts = get('*', cmd)
 
     proxy_lists = {}
@@ -374,6 +459,7 @@ def get_docker(interfaces=None, cidrs=None):
 
         # Process each container
         for container in six.itervalues(containers):
+            container_id = container['Info']['Id']
             if container['Image'] not in proxy_lists:
                 proxy_lists[container['Image']] = {}
             for dock_port in container['Ports']:
@@ -382,12 +468,61 @@ def get_docker(interfaces=None, cidrs=None):
                 # If port is 0.0.0.0, then we must get the docker host IP
                 if ip_address == '0.0.0.0':
                     for ip_ in host_ips:
-                        proxy_lists[container['Image']].setdefault('ipv4', {}).setdefault(dock_port['PrivatePort'], []).append(
-                            '{0}:{1}'.format(ip_, dock_port['PublicPort']))
-                        proxy_lists[container['Image']]['ipv4'][dock_port['PrivatePort']] = list(set(proxy_lists[container['Image']]['ipv4'][dock_port['PrivatePort']]))
+                        containers = proxy_lists[container['Image']].setdefault('ipv4', {}).setdefault(dock_port['PrivatePort'], [])
+                        container_network_footprint = '{0}:{1}'.format(ip_, dock_port['PublicPort'])
+                        if with_container_id:
+                            value = (container_network_footprint, container_id)
+                        else:
+                            value = container_network_footprint
+                        if value not in containers:
+                            containers.append(value)
                 elif ip_address:
-                    proxy_lists[container['Image']].setdefault('ipv4', {}).setdefault(dock_port['PrivatePort'], []).append(
-                        '{0}:{1}'.format(dock_port['IP'], dock_port['PublicPort']))
-                    proxy_lists[container['Image']]['ipv4'][dock_port['PrivatePort']] = list(set(proxy_lists[container['Image']]['ipv4'][dock_port['PrivatePort']]))
+                    containers = proxy_lists[container['Image']].setdefault('ipv4', {}).setdefault(dock_port['PrivatePort'], [])
+                    container_network_footprint = '{0}:{1}'.format(dock_port['IP'], dock_port['PublicPort'])
+                    if with_container_id:
+                        value = (container_network_footprint, container_id)
+                    else:
+                        value = container_network_footprint
+                    if value not in containers:
+                        containers.append(value)
 
     return proxy_lists
+
+
+def valid():
+    '''
+    List valid entries in mine configuration.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' mine.valid
+    '''
+    m_data = __salt__['config.merge']('mine_functions', {})
+    # If we don't have any mine functions configured, then we should just bail out
+    if not m_data:
+        return
+
+    data = {}
+    for func in m_data:
+        if m_data[func] and isinstance(m_data[func], dict):
+            mine_func = m_data[func].pop('mine_function', func)
+            if not _mine_function_available(mine_func):
+                continue
+            data[func] = {mine_func: m_data[func]}
+        elif m_data[func] and isinstance(m_data[func], list):
+            mine_func = func
+            if isinstance(m_data[func][0], dict) and 'mine_function' in m_data[func][0]:
+                mine_func = m_data[func][0]['mine_function']
+                m_data[func].pop(0)
+
+            if not _mine_function_available(mine_func):
+                continue
+            data[func] = {mine_func: m_data[func]}
+        else:
+            if not _mine_function_available(func):
+                continue
+            data[func] = m_data[func]
+
+    return data

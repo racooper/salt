@@ -2,9 +2,10 @@
 '''
 Module for running arbitrary tests
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import Python libs
+import logging
 import os
 import sys
 import time
@@ -12,11 +13,15 @@ import traceback
 import random
 
 # Import Salt libs
-import salt
-import salt.utils
+import salt.exceptions
+import salt.utils.args
+import salt.utils.functools
+import salt.utils.hashutils
+import salt.utils.platform
 import salt.version
 import salt.loader
-import salt.ext.six as six
+from salt.ext import six
+from salt.ext.six.moves import builtins
 from salt.utils.decorators import depends
 
 __proxyenabled__ = ['*']
@@ -24,8 +29,11 @@ __proxyenabled__ = ['*']
 # Don't shadow built-in's.
 __func_alias__ = {
     'true_': 'true',
-    'false_': 'false'
+    'false_': 'false',
+    'try_': 'try',
 }
+
+log = logging.getLogger(__name__)
 
 
 @depends('non_existantmodulename')
@@ -37,7 +45,7 @@ def attr_call():
     '''
     Call grains.items via the attribute
 
-    CLI Example::
+    CLI Example:
 
     .. code-block:: bash
 
@@ -48,10 +56,10 @@ def attr_call():
 
 def module_report():
     '''
-    Return a dict containing all of the exeution modules with a report on
+    Return a dict containing all of the execution modules with a report on
     the overall availability via different references
 
-    CLI Example::
+    CLI Example:
 
     .. code-block:: bash
 
@@ -110,11 +118,16 @@ def ping():
 
         salt '*' test.ping
     '''
-    if 'proxymodule' in __opts__:
-        ping_cmd = __opts__['proxymodule'].loaded_base_name + '.ping'
-        return __opts__['proxymodule'][ping_cmd]()
-    else:
+
+    if not salt.utils.platform.is_proxy():
+        log.debug('test.ping received for minion \'%s\'', __opts__.get('id'))
         return True
+    else:
+        ping_cmd = __opts__['proxy']['proxytype'] + '.ping'
+        if __opts__.get('add_proxymodule_to_opts', False):
+            return __opts__['proxymodule'][ping_cmd]()
+        else:
+            return __proxy__[ping_cmd]()
 
 
 def sleep(length):
@@ -186,7 +199,7 @@ def versions_report():
     return '\n'.join(salt.version.versions_report())
 
 
-versions = versions_report
+versions = salt.utils.functools.alias_function(versions_report, 'versions')
 
 
 def conf_test():
@@ -278,11 +291,11 @@ def arg_type(*args, **kwargs):
     ret = {'args': [], 'kwargs': {}}
     # all the args
     for argument in args:
-        ret['args'].append(str(type(argument)))
+        ret['args'].append(six.text_type(type(argument)))
 
     # all the kwargs
     for key, val in six.iteritems(kwargs):
-        ret['kwargs'][key] = str(type(val))
+        ret['kwargs'][key] = six.text_type(type(val))
 
     return ret
 
@@ -303,6 +316,18 @@ def arg_repr(*args, **kwargs):
     return {"args": repr(args), "kwargs": repr(kwargs)}
 
 
+def arg_clean(*args, **kwargs):
+    '''
+    Like test.arg but cleans kwargs of the __pub* items
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' test.arg_clean 1 "two" 3.1 txt="hello" wow='{a: 1, b: "hello"}'
+    '''
+    return dict(args=args, kwargs=salt.utils.args.clean_kwargs(**kwargs))
+
+
 def fib(num):
     '''
     Return the num-th Fibonacci number, and the time it took to compute in
@@ -317,19 +342,20 @@ def fib(num):
         salt '*' test.fib 3
     '''
     num = int(num)
+    if num < 0:
+        raise ValueError('Negative number is not allowed!')
     start = time.time()
     if num < 2:
         return num, time.time() - start
-    return _fib(num-1) + _fib(num-2), time.time() - start
 
+    prev = 0
+    curr = 1
+    i = 1
+    while i < num:
+        prev, curr = curr, prev + curr
+        i += 1
 
-def _fib(num):
-    '''
-    Helper method for test.fib, doesn't calculate the time.
-    '''
-    if num < 2:
-        return num
-    return _fib(num-1) + _fib(num-2)
+    return curr, time.time() - start
 
 
 def collatz(start):
@@ -469,26 +495,27 @@ def opts_pkg():
     return ret
 
 
-def rand_str(size=9999999999, hash_type=None):
+def random_hash(size=9999999999, hash_type=None):
     '''
-    Return a random string
+    .. versionadded:: 2015.5.2
+    .. versionchanged:: 2018.3.0
+        Function has been renamed from ``test.rand_str`` to
+        ``test.random_hash``
 
-        size
-            size of the string to generate
-        hash_type
-            hash type to use
-
-            .. versionadded:: 2015.5.2
+    Generates a random number between 1 and ``size``, then returns a hash of
+    that number. If no ``hash_type`` is passed, the hash_type specified by the
+    minion's :conf_minion:`hash_type` config option is used.
 
     CLI Example:
 
     .. code-block:: bash
 
-        salt '*' test.rand_str
+        salt '*' test.random_hash
+        salt '*' test.random_hash hash_type=sha512
     '''
     if not hash_type:
         hash_type = __opts__.get('hash_type', 'md5')
-    return salt.utils.rand_str(hash_type=hash_type, size=size)
+    return salt.utils.hashutils.random_hash(size=size, hash_type=hash_type)
 
 
 def exception(message='Test Exception'):
@@ -537,7 +564,7 @@ def try_(module, return_try_exception=False, **kwargs):
     '''
     Try to run a module command. On an exception return None.
     If `return_try_exception` is set True return the exception.
-    This can be helpfull in templates where running a module might fail as expected.
+    This can be helpful in templates where running a module might fail as expected.
 
     CLI Example:
 
@@ -565,7 +592,7 @@ def assertion(assertion):
 
     .. code-block:: bash
 
-        salt '*' test.assert False
+        salt '*' test.assertion False
     '''
     assert assertion
 
@@ -594,3 +621,44 @@ def false_():
         salt '*' test.false
     '''
     return False
+
+
+def raise_exception(name, *args, **kwargs):
+    '''
+    Raise an exception. Built-in exceptions and those in ``salt.exceptions``
+    can be raised by this test function. If no matching exception is found,
+    then no exception will be raised and this function will return ``False``.
+
+    This function is designed to test Salt's exception and return code
+    handling.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' test.raise_exception TypeError "An integer is required"
+        salt '*' test.raise_exception salt.exceptions.CommandExecutionError "Something went wrong"
+    '''
+    def _is_exc(cls):
+        for base in cls.__bases__:
+            if base is BaseException:
+                break
+            else:
+                return _is_exc(base)
+        else:
+            return False
+        return True
+
+    try:
+        if name.startswith('salt.exceptions.'):
+            exc = getattr(salt.exceptions, name[16:])
+        else:
+            exc = getattr(builtins, name)
+        if _is_exc(exc):
+            raise exc(*args, **salt.utils.args.clean_kwargs(**kwargs))
+        else:
+            log.error('%s is not an exception', name)
+            return False
+    except AttributeError:
+        log.error('No such exception: %s', name)
+        return False

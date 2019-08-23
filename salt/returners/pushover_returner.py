@@ -2,7 +2,7 @@
 '''
 Return salt data via pushover (http://www.pushover.net)
 
-.. versionadded:: Boron
+.. versionadded:: 2016.3.0
 
 The following fields can be set in the minion conf file::
 
@@ -48,7 +48,7 @@ PushOver settings may also be configured as::
         retry: 2
 
     pushover_profile:
-        token: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        pushover.token: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
     pushover:
         user: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
@@ -67,8 +67,15 @@ PushOver settings may also be configured as::
   To use the alternative configuration, append '--return_config alternative' to the salt command. ex:
 
     salt '*' test.ping --return pushover --return_config alternative
+
+To override individual configuration items, append --return_kwargs '{"key:": "value"}' to the salt command.
+
+.. code-block:: bash
+
+    salt '*' test.ping --return pushover --return_kwargs '{"title": "Salt is awesome!"}'
+
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import Python libs
 import pprint
@@ -238,7 +245,7 @@ def returner(ret):
                            sound=sound,
                            token=token)
 
-    log.debug('result {0}'.format(result))
+    log.debug('pushover result %s', result)
     if not result['res']:
-        log.info('Error: {0}'.format(result['message']))
+        log.info('Error: %s', result['message'])
     return

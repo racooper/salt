@@ -1,10 +1,14 @@
 # -*- coding: utf-8 -*-
+'''
+State to work with sysrc
+
+'''
 
 # Import Python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals, print_function
 
 # Import 3rd-party libs
-import salt.ext.six as six
+from salt.ext import six
 
 # define the module's virtual name
 __virtualname__ = 'sysrc'
@@ -29,6 +33,15 @@ def managed(name, value, **kwargs):
         (optional) The rc file to add the variable to.
     jail
         (option) the name or JID of the jail to set the value in.
+
+    Example:
+
+    .. code-block:: yaml
+
+        syslogd:
+          sysrc.managed:
+            - name: syslogd_flags
+            - value: -ss
     '''
 
     ret = {'name': name, 'changes': {}, 'result': False, 'comment': ''}

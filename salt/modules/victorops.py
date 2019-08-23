@@ -13,15 +13,15 @@ Requires an ``api_key`` in ``/etc/salt/minion``:
 '''
 
 # Import python libs
-from __future__ import absolute_import, print_function
+from __future__ import absolute_import, print_function, unicode_literals
 import datetime
-import json
 import logging
 import time
 
 # Import salt libs
 from salt.exceptions import SaltInvocationError
 import salt.utils.http
+import salt.utils.json
 
 log = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ def _query(action=None,
     if routing_key:
         path += routing_key
 
-    log.debug('VictorOps URL: {0}'.format(path))
+    log.debug('VictorOps URL: %s', path)
 
     if not isinstance(args, dict):
         args = {}
@@ -180,8 +180,9 @@ def create_event(message_type=None, routing_key='everybody', **kwargs):
             timestamp = datetime.datetime.strptime(kwargs['timestamp'], timestamp_fmt)
             data['timestamp'] = int(time.mktime(timestamp.timetuple()))
         except (TypeError, ValueError):
-            raise SaltInvocationError('Date string could not be parsed: %s, %s',
-                                      kwargs['timestamp'], timestamp_fmt)
+            raise SaltInvocationError('Date string could not be parsed: {0}, {1}'.format(
+                kwargs['timestamp'], timestamp_fmt)
+            )
 
     if 'state_start_time' in kwargs:
         state_start_time_fmt = kwargs.get('state_start_time_fmt', '%Y-%m-%dT%H:%M:%S')
@@ -190,8 +191,9 @@ def create_event(message_type=None, routing_key='everybody', **kwargs):
             state_start_time = datetime.datetime.strptime(kwargs['state_start_time'], state_start_time_fmt)
             data['state_start_time'] = int(time.mktime(state_start_time.timetuple()))
         except (TypeError, ValueError):
-            raise SaltInvocationError('Date string could not be parsed: %s, %s',
-                                      kwargs['state_start_time'], state_start_time_fmt)
+            raise SaltInvocationError('Date string could not be parsed: {0}, {1}'.format(
+                kwargs['state_start_time'], state_start_time_fmt)
+            )
 
     for kwarg in keyword_args:
         if kwarg in kwargs:
@@ -199,11 +201,11 @@ def create_event(message_type=None, routing_key='everybody', **kwargs):
                 data[kwarg] = kwargs[kwarg]
             else:
                 # Should this faile on the wrong type.
-                log.error('Wrong type, skipping {0}'.format(kwarg))
+                log.error('Wrong type, skipping %s', kwarg)
 
     status, result = _query(action='alert',
                             routing_key=routing_key,
-                            data=json.dumps(data),
+                            data=salt.utils.json.dumps(data),
                             method='POST'
                             )
     return result

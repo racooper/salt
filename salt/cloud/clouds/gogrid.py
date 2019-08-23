@@ -37,18 +37,19 @@ Set up the cloud configuration at ``/etc/salt/cloud.providers`` or
     argument should not be used on maps referencing GoGrid instances.
 
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import python libs
 import pprint
 import logging
 import time
-import hashlib
 
 # Import salt cloud libs
 import salt.config as config
 import salt.utils.cloud
+import salt.utils.hashutils
 from salt.exceptions import SaltCloudSystemExit, SaltCloudException
+from salt.ext import six
 
 # Get logging started
 log = logging.getLogger(__name__)
@@ -86,40 +87,33 @@ def create(vm_):
         # Check for required profile parameters before sending any API calls.
         if vm_['profile'] and config.is_profile_configured(__opts__,
                                                            __active_provider_name__ or 'gogrid',
-                                                           vm_['profile']) is False:
+                                                           vm_['profile'],
+                                                           vm_=vm_) is False:
             return False
     except AttributeError:
         pass
 
-    # Since using "provider: <provider-engine>" is deprecated, alias provider
-    # to use driver: "driver: <provider-engine>"
-    if 'provider' in vm_:
-        vm_['driver'] = vm_.pop('provider')
-
-    salt.utils.cloud.fire_event(
+    __utils__['cloud.fire_event'](
         'event',
         'starting create',
         'salt/cloud/{0}/creating'.format(vm_['name']),
-        {
-            'name': vm_['name'],
-            'profile': vm_['profile'],
-            'provider': vm_['driver'],
-        },
+        args=__utils__['cloud.filter_event']('creating', vm_, ['name', 'profile', 'provider', 'driver']),
+        sock_dir=__opts__['sock_dir'],
         transport=__opts__['transport']
     )
 
     if len(vm_['name']) > 20:
         raise SaltCloudException('VM names must not be longer than 20 characters')
 
-    log.info('Creating Cloud VM {0}'.format(vm_['name']))
+    log.info('Creating Cloud VM %s', vm_['name'])
     image_id = avail_images()[vm_['image']]['id']
     if 'assign_public_ip' in vm_:
         host_ip = vm_['assign_public_ip']
     else:
         public_ips = list_public_ips()
-        if len(public_ips.keys()) < 1:
+        if not public_ips:
             raise SaltCloudException('No more IPs available')
-        host_ip = public_ips.keys()[0]
+        host_ip = next(iter(public_ips))
 
     create_kwargs = {
         'name': vm_['name'],
@@ -128,11 +122,14 @@ def create(vm_):
         'ip': host_ip,
     }
 
-    salt.utils.cloud.fire_event(
+    __utils__['cloud.fire_event'](
         'event',
         'requesting instance',
         'salt/cloud/{0}/requesting'.format(vm_['name']),
-        {'kwargs': create_kwargs},
+        args={
+            'kwargs': __utils__['cloud.filter_event']('requesting', create_kwargs, list(create_kwargs)),
+        },
+        sock_dir=__opts__['sock_dir'],
         transport=__opts__['transport']
     )
 
@@ -140,11 +137,9 @@ def create(vm_):
         data = _query('grid', 'server/add', args=create_kwargs)
     except Exception:
         log.error(
-            'Error creating {0} on GOGRID\n\n'
+            'Error creating %s on GOGRID\n\n'
             'The following exception was thrown when trying to '
-            'run the initial deployment:\n'.format(
-                vm_['name']
-            ),
+            'run the initial deployment:\n', vm_['name'],
             # Show the traceback if the debug logging level is enabled
             exc_info_on_loglevel=logging.DEBUG
         )
@@ -173,25 +168,21 @@ def create(vm_):
     )
 
     vm_['ssh_host'] = host_ip
-    ret = salt.utils.cloud.bootstrap(vm_, __opts__)
+    ret = __utils__['cloud.bootstrap'](vm_, __opts__)
     ret.update(data)
 
-    log.info('Created Cloud VM \'{0[name]}\''.format(vm_))
+    log.info('Created Cloud VM \'%s\'', vm_['name'])
     log.debug(
-        '\'{0[name]}\' VM creation details:\n{1}'.format(
-            vm_, pprint.pformat(data)
-        )
+        '\'%s\' VM creation details:\n%s',
+        vm_['name'], pprint.pformat(data)
     )
 
-    salt.utils.cloud.fire_event(
+    __utils__['cloud.fire_event'](
         'event',
         'created instance',
         'salt/cloud/{0}/created'.format(vm_['name']),
-        {
-            'name': vm_['name'],
-            'profile': vm_['profile'],
-            'provider': vm_['driver'],
-        },
+        args=__utils__['cloud.filter_event']('created', vm_, ['name', 'profile', 'provider', 'driver']),
+        sock_dir=__opts__['sock_dir'],
         transport=__opts__['transport']
     )
 
@@ -220,7 +211,7 @@ def list_nodes(full=False, call=None):
 
     for node in nodes:
         ret[node] = {}
-        for item in 'id', 'image', 'size', 'public_ips', 'private_ips', 'state':
+        for item in ('id', 'image', 'size', 'public_ips', 'private_ips', 'state'):
             ret[node][item] = nodes[node][item]
 
     return ret
@@ -322,10 +313,11 @@ def list_passwords(kwargs=None, call=None):
 
     ret = {}
     for item in response['list']:
-        server = item['server']['name']
-        if server not in ret:
-            ret[server] = []
-        ret[server].append(item)
+        if 'server' in item:
+            server = item['server']['name']
+            if server not in ret:
+                ret[server] = []
+            ret[server].append(item)
 
     return ret
 
@@ -406,26 +398,28 @@ def destroy(name, call=None):
             '-a or --action.'
         )
 
-    salt.utils.cloud.fire_event(
+    __utils__['cloud.fire_event'](
         'event',
         'destroying instance',
         'salt/cloud/{0}/destroying'.format(name),
-        {'name': name},
+        args={'name': name},
+        sock_dir=__opts__['sock_dir'],
         transport=__opts__['transport']
     )
 
     response = _query('grid', 'server/delete', args={'name': name})
 
-    salt.utils.cloud.fire_event(
+    __utils__['cloud.fire_event'](
         'event',
         'destroyed instance',
         'salt/cloud/{0}/destroyed'.format(name),
-        {'name': name},
+        args={'name': name},
+        sock_dir=__opts__['sock_dir'],
         transport=__opts__['transport']
     )
 
     if __opts__.get('update_cachedir', False) is True:
-        salt.utils.cloud.delete_minion_cachedir(name, __active_provider_name__.split(':')[0], __opts__)
+        __utils__['cloud.delete_minion_cachedir'](name, __active_provider_name__.split(':')[0], __opts__)
 
     return response
 
@@ -531,14 +525,14 @@ def _query(action=None,
     if command:
         path += '/{0}'.format(command)
 
-    log.debug('GoGrid URL: {0}'.format(path))
+    log.debug('GoGrid URL: %s', path)
 
     if not isinstance(args, dict):
         args = {}
 
-    epoch = str(int(time.time()))
+    epoch = six.text_type(int(time.time()))
     hashtext = ''.join((apikey, sharedsecret, epoch))
-    args['sig'] = hashlib.md5(hashtext).hexdigest()
+    args['sig'] = salt.utils.hashutils.md5_digest(hashtext)
     args['format'] = 'json'
     args['v'] = '1.0'
     args['api_key'] = apikey
@@ -566,10 +560,6 @@ def _query(action=None,
         status=True,
         opts=__opts__,
     )
-    log.debug(
-        'GoGrid Response Status Code: {0}'.format(
-            result['status']
-        )
-    )
+    log.debug('GoGrid Response Status Code: %s', result['status'])
 
     return result['dict']

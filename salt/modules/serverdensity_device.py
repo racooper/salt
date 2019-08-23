@@ -7,17 +7,18 @@ Wrapper around Server Density API
 '''
 
 # Import Python libs
-from __future__ import absolute_import
-import json
+from __future__ import absolute_import, unicode_literals, print_function
 import logging
 import os
 import tempfile
 
-# Import 3rd-party libs
-import salt.ext.six as six
-from salt.ext.six.moves import map  # pylint: disable=import-error,no-name-in-module,redefined-builtin
-
+# Import Salt libs
+import salt.utils.json
 from salt.exceptions import CommandExecutionError
+
+# Import 3rd-party libs
+from salt.ext import six
+from salt.ext.six.moves import map  # pylint: disable=import-error,no-name-in-module,redefined-builtin
 
 try:
     import requests
@@ -35,7 +36,7 @@ def __virtual__():
     :return: The virtual name of the module.
     '''
     if not ENABLED:
-        return False
+        return (False, 'The requests python module cannot be imported')
     return "serverdensity_device"
 
 
@@ -50,9 +51,9 @@ def get_sd_auth(val, sd_auth_pillar_name='serverdensity'):
         salt '*' serverdensity_device.get_sd_auth <val>
     '''
     sd_pillar = __pillar__.get(sd_auth_pillar_name)
-    log.debug('Server Density Pillar: {0}'.format(sd_pillar))
+    log.debug('Server Density Pillar: %s', sd_pillar)
     if not sd_pillar:
-        log.error('Could not load {0} pillar'.format(sd_auth_pillar_name))
+        log.error('Could not load %s pillar', sd_auth_pillar_name)
         raise CommandExecutionError(
             '{0} pillar is required for authentication'.format(sd_auth_pillar_name)
         )
@@ -60,7 +61,7 @@ def get_sd_auth(val, sd_auth_pillar_name='serverdensity'):
     try:
         return sd_pillar[val]
     except KeyError:
-        log.error('Could not find value {0} in pillar'.format(val))
+        log.error('Could not find value %s in pillar', val)
         raise CommandExecutionError('{0} value was not found in pillar'.format(val))
 
 
@@ -86,7 +87,7 @@ def create(name, **params):
         salt '*' serverdensity_device.create lama
         salt '*' serverdensity_device.create rich_lama group=lama_band installedRAM=32768
     '''
-    log.debug('Server Density params: {0}'.format(params))
+    log.debug('Server Density params: %s', params)
     params = _clean_salt_variables(params)
 
     params['name'] = name
@@ -95,13 +96,13 @@ def create(name, **params):
         params={'token': get_sd_auth('api_token')},
         data=params
     )
-    log.debug('Server Density API Response: {0}'.format(api_response))
-    log.debug('Server Density API Response content: {0}'.format(api_response.content))
+    log.debug('Server Density API Response: %s', api_response)
+    log.debug('Server Density API Response content: %s', api_response.content)
     if api_response.status_code == 200:
         try:
-            return json.loads(api_response.content)
+            return salt.utils.json.loads(api_response.content)
         except ValueError:
-            log.error('Could not parse API Response content: {0}'.format(api_response.content))
+            log.error('Could not parse API Response content: %s', api_response.content)
             raise CommandExecutionError(
                 'Failed to create, API Response: {0}'.format(api_response)
             )
@@ -126,13 +127,13 @@ def delete(device_id):
         'https://api.serverdensity.io/inventory/devices/' + device_id,
         params={'token': get_sd_auth('api_token')}
     )
-    log.debug('Server Density API Response: {0}'.format(api_response))
-    log.debug('Server Density API Response content: {0}'.format(api_response.content))
+    log.debug('Server Density API Response: %s', api_response)
+    log.debug('Server Density API Response content: %s', api_response.content)
     if api_response.status_code == 200:
         try:
-            return json.loads(api_response.content)
+            return salt.utils.json.loads(api_response.content)
         except ValueError:
-            log.error('Could not parse API Response content: {0}'.format(api_response.content))
+            log.error('Could not parse API Response content: %s', api_response.content)
             raise CommandExecutionError(
                 'Failed to create, API Response: {0}'.format(api_response)
             )
@@ -168,21 +169,21 @@ def ls(**params):
 
     # Convert all ints to strings:
     for key, val in six.iteritems(params):
-        params[key] = str(val)
+        params[key] = six.text_type(val)
 
     api_response = requests.get(
         'https://api.serverdensity.io/inventory/{0}'.format(endpoint),
-        params={'token': get_sd_auth('api_token'), 'filter': json.dumps(params)}
+        params={'token': get_sd_auth('api_token'), 'filter': salt.utils.json.dumps(params)}
     )
-    log.debug('Server Density API Response: {0}'.format(api_response))
-    log.debug('Server Density API Response content: {0}'.format(api_response.content))
+    log.debug('Server Density API Response: %s', api_response)
+    log.debug('Server Density API Response content: %s', api_response.content)
     if api_response.status_code == 200:
         try:
-            return json.loads(api_response.content)
+            return salt.utils.json.loads(api_response.content)
         except ValueError:
             log.error(
-                'Could not parse Server Density API Response content: {0}'
-                .format(api_response.content)
+                'Could not parse Server Density API Response content: %s',
+                api_response.content
             )
             raise CommandExecutionError(
                 'Failed to create, Server Density API Response: {0}'
@@ -213,15 +214,15 @@ def update(device_id, **params):
         params={'token': get_sd_auth('api_token')},
         data=params
     )
-    log.debug('Server Density API Response: {0}'.format(api_response))
-    log.debug('Server Density API Response content: {0}'.format(api_response.content))
+    log.debug('Server Density API Response: %s', api_response)
+    log.debug('Server Density API Response content: %s', api_response.content)
     if api_response.status_code == 200:
         try:
-            return json.loads(api_response.content)
+            return salt.utils.json.loads(api_response.content)
         except ValueError:
             log.error(
-                'Could not parse Server Density API Response content: {0}'
-                .format(api_response.content)
+                'Could not parse Server Density API Response content: %s',
+                api_response.content
             )
             raise CommandExecutionError(
                 'Failed to create, API Response: {0}'.format(api_response)
@@ -230,16 +231,18 @@ def update(device_id, **params):
         return None
 
 
-def install_agent(agent_key):
+def install_agent(agent_key, agent_version=1):
     '''
     Function downloads Server Density installation agent, and installs sd-agent
-    with agent_key.
+    with agent_key. Optionally the agent_version would select the series to
+    use (defaults on the v1 one).
 
     CLI Example:
 
     .. code-block:: bash
 
         salt '*' serverdensity_device.install_agent c2bbdd6689ff46282bdaa07555641498
+        salt '*' serverdensity_device.install_agent c2bbdd6689ff46282bdaa07555641498 2
     '''
     work_dir = os.path.join(__opts__['cachedir'], 'tmp')
     if not os.path.isdir(work_dir):
@@ -249,16 +252,23 @@ def install_agent(agent_key):
                                                    delete=False)
     install_filename = install_file.name
     install_file.close()
-    account_url = get_sd_auth('account_url')
+
+    account_field = 'account_url'
+    url = 'https://www.serverdensity.com/downloads/agent-install.sh'
+    if agent_version == 2:
+        account_field = 'account_name'
+        url = 'https://archive.serverdensity.com/agent-install.sh'
+
+    account = get_sd_auth(account_field)
 
     __salt__['cmd.run'](
-        cmd='curl https://www.serverdensity.com/downloads/agent-install.sh -o {0}'.format(install_filename),
+        cmd='curl -L {0} -o {1}'.format(url, install_filename),
         cwd=work_dir
     )
     __salt__['cmd.run'](cmd='chmod +x {0}'.format(install_filename), cwd=work_dir)
 
     return __salt__['cmd.run'](
-        cmd='./{filename} -a {account_url} -k {agent_key}'.format(
-            filename=install_filename, account_url=account_url, agent_key=agent_key),
+        cmd='{filename} -a {account} -k {agent_key}'.format(
+            filename=install_filename, account=account, agent_key=agent_key),
         cwd=work_dir
     )

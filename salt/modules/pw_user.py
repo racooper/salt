@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 '''
-Manage users with the useradd command
+Manage users with the pw command
+
+.. important::
+    If you feel that Salt should be using this module to manage users on a
+    minion, and it is using a different module (or gives an error similar to
+    *'user.info' is not available*), see :ref:`here
+    <module-provider-override>`.
 '''
 
 # Notes:
@@ -28,7 +34,7 @@ Manage users with the useradd command
 # someuser:*:1001:1001::0:0:SomeUser Name:/home/someuser:/bin/sh
 
 # Import python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals, print_function
 import copy
 import logging
 try:
@@ -38,10 +44,12 @@ except ImportError:
     HAS_PWD = False
 
 # Import 3rd party libs
-import salt.ext.six as six
+from salt.ext import six
 
 # Import salt libs
-import salt.utils
+import salt.utils.args
+import salt.utils.data
+import salt.utils.user
 from salt.exceptions import CommandExecutionError
 
 log = logging.getLogger(__name__)
@@ -52,28 +60,33 @@ __virtualname__ = 'user'
 
 def __virtual__():
     '''
-    Set the user module if the kernel is FreeBSD
+    Set the user module if the kernel is FreeBSD or DragonFly
     '''
-    if HAS_PWD and __grains__['kernel'] == 'FreeBSD':
+    if HAS_PWD and __grains__.get('kernel') in ('FreeBSD', 'DragonFly'):
         return __virtualname__
-    return False
+    return (False, 'The pw_user execution module cannot be loaded: the pwd python module is not available or the system is not FreeBSD.')
 
 
 def _get_gecos(name):
     '''
     Retrieve GECOS field info and return it in dictionary form
     '''
-    gecos_field = pwd.getpwnam(name).pw_gecos.split(',', 3)
+    try:
+        gecos_field = pwd.getpwnam(name).pw_gecos.split(',', 3)
+    except KeyError:
+        raise CommandExecutionError(
+            'User \'{0}\' does not exist'.format(name)
+        )
     if not gecos_field:
         return {}
     else:
         # Assign empty strings for any unspecified trailing GECOS fields
         while len(gecos_field) < 4:
             gecos_field.append('')
-        return {'fullname': str(gecos_field[0]),
-                'roomnumber': str(gecos_field[1]),
-                'workphone': str(gecos_field[2]),
-                'homephone': str(gecos_field[3])}
+        return {'fullname': salt.utils.data.decode(gecos_field[0]),
+                'roomnumber': salt.utils.data.decode(gecos_field[1]),
+                'workphone': salt.utils.data.decode(gecos_field[2]),
+                'homephone': salt.utils.data.decode(gecos_field[3])}
 
 
 def _build_gecos(gecos_dict):
@@ -81,10 +94,29 @@ def _build_gecos(gecos_dict):
     Accepts a dictionary entry containing GECOS field names and their values,
     and returns a full GECOS comment string, to be used with pw usermod.
     '''
-    return '{0},{1},{2},{3}'.format(gecos_dict.get('fullname', ''),
+    return u'{0},{1},{2},{3}'.format(gecos_dict.get('fullname', ''),
                                     gecos_dict.get('roomnumber', ''),
                                     gecos_dict.get('workphone', ''),
                                     gecos_dict.get('homephone', ''))
+
+
+def _update_gecos(name, key, value):
+    '''
+    Common code to change a user's GECOS information
+    '''
+    if not isinstance(value, six.string_types):
+        value = six.text_type(value)
+    pre_info = _get_gecos(name)
+    if not pre_info:
+        return False
+    if value == pre_info[key]:
+        return True
+    gecos_data = copy.deepcopy(pre_info)
+    gecos_data[key] = value
+    cmd = ['pw', 'usermod', name, '-c', _build_gecos(gecos_data)]
+    __salt__['cmd.run'](cmd, python_shell=False)
+    post_info = info(name)
+    return _get_gecos(name).get(key) == value
 
 
 def add(name,
@@ -110,40 +142,38 @@ def add(name,
 
         salt '*' user.add name <uid> <gid> <groups> <home> <shell>
     '''
-    kwargs = salt.utils.clean_kwargs(**kwargs)
-    if salt.utils.is_true(kwargs.pop('system', False)):
+    kwargs = salt.utils.args.clean_kwargs(**kwargs)
+    if salt.utils.data.is_true(kwargs.pop('system', False)):
         log.warning('pw_user module does not support the \'system\' argument')
     if kwargs:
         log.warning('Invalid kwargs passed to user.add')
 
     if isinstance(groups, six.string_types):
         groups = groups.split(',')
-    cmd = 'pw useradd '
+    cmd = ['pw', 'useradd']
     if uid:
-        cmd += '-u {0} '.format(uid)
+        cmd.extend(['-u', uid])
     if gid:
-        cmd += '-g {0} '.format(gid)
+        cmd.extend(['-g', gid])
     if groups:
-        cmd += '-G {0} '.format(','.join(groups))
+        cmd.extend(['-G', ','.join(groups)])
     if home is not None:
-        cmd += '-d {0} '.format(home)
+        cmd.extend(['-d', home])
     if createhome is True:
-        cmd += '-m '
+        cmd.append('-m')
     if loginclass:
-        cmd += '-L {0}'.format(loginclass)
+        cmd.extend(['-L', loginclass])
     if shell:
-        cmd += '-s {0} '.format(shell)
-    if not salt.utils.is_true(unique):
-        cmd += '-o '
-    gecos_field = '{0},{1},{2},{3}'.format(fullname,
-                                           roomnumber,
-                                           workphone,
-                                           homephone)
-    cmd += '-c "{0}" '.format(gecos_field)
-    cmd += '-n {0}'.format(name)
-    ret = __salt__['cmd.run_all'](cmd, python_shell=False)
-
-    return not ret['retcode']
+        cmd.extend(['-s', shell])
+    if not salt.utils.data.is_true(unique):
+        cmd.append('-o')
+    gecos_field = _build_gecos({'fullname': fullname,
+                                'roomnumber': roomnumber,
+                                'workphone': workphone,
+                                'homephone': homephone})
+    cmd.extend(['-c', gecos_field])
+    cmd.extend(['-n', name])
+    return __salt__['cmd.retcode'](cmd, python_shell=False) == 0
 
 
 def delete(name, remove=False, force=False):
@@ -156,17 +186,14 @@ def delete(name, remove=False, force=False):
 
         salt '*' user.delete name remove=True force=True
     '''
-    if salt.utils.is_true(force):
+    if salt.utils.data.is_true(force):
         log.error('pw userdel does not support force-deleting user while '
                   'user is logged in')
-    cmd = 'pw userdel '
+    cmd = ['pw', 'userdel']
     if remove:
-        cmd += '-r '
-    cmd += '-n ' + name
-
-    ret = __salt__['cmd.run_all'](cmd, python_shell=False)
-
-    return not ret['retcode']
+        cmd.append('-r')
+    cmd.extend(['-n', name])
+    return __salt__['cmd.retcode'](cmd, python_shell=False) == 0
 
 
 def getent(refresh=False):
@@ -200,14 +227,15 @@ def chuid(name, uid):
         salt '*' user.chuid foo 4376
     '''
     pre_info = info(name)
+    if not pre_info:
+        raise CommandExecutionError(
+            'User \'{0}\' does not exist'.format(name)
+        )
     if uid == pre_info['uid']:
         return True
-    cmd = 'pw usermod -u {0} -n {1}'.format(uid, name)
+    cmd = ['pw', 'usermod', '-u', uid, '-n', name]
     __salt__['cmd.run'](cmd, python_shell=False)
-    post_info = info(name)
-    if post_info['uid'] != pre_info['uid']:
-        return post_info['uid'] == uid
-    return False
+    return info(name).get('uid') == uid
 
 
 def chgid(name, gid):
@@ -221,14 +249,15 @@ def chgid(name, gid):
         salt '*' user.chgid foo 4376
     '''
     pre_info = info(name)
+    if not pre_info:
+        raise CommandExecutionError(
+            'User \'{0}\' does not exist'.format(name)
+        )
     if gid == pre_info['gid']:
         return True
-    cmd = 'pw usermod -g {0} -n {1}'.format(gid, name)
+    cmd = ['pw', 'usermod', '-g', gid, '-n', name]
     __salt__['cmd.run'](cmd, python_shell=False)
-    post_info = info(name)
-    if post_info['gid'] != pre_info['gid']:
-        return post_info['gid'] == gid
-    return False
+    return info(name).get('gid') == gid
 
 
 def chshell(name, shell):
@@ -242,20 +271,31 @@ def chshell(name, shell):
         salt '*' user.chshell foo /bin/zsh
     '''
     pre_info = info(name)
+    if not pre_info:
+        raise CommandExecutionError(
+            'User \'{0}\' does not exist'.format(name)
+        )
     if shell == pre_info['shell']:
         return True
-    cmd = 'pw usermod -s {0} -n {1}'.format(shell, name)
+    cmd = ['pw', 'usermod', '-s', shell, '-n', name]
     __salt__['cmd.run'](cmd, python_shell=False)
-    post_info = info(name)
-    if post_info['shell'] != pre_info['shell']:
-        return post_info['shell'] == shell
-    return False
+    return info(name).get('shell') == shell
 
 
 def chhome(name, home, persist=False):
     '''
-    Change the home directory of the user, pass true for persist to copy files
-    to the new home dir
+    Set a new home directory for an existing user
+
+    name
+        Username to modify
+
+    home
+        New home directory to set
+
+    persist : False
+        Set to ``True`` to prevent configuration files in the new home
+        directory from being overwritten by the files from the skeleton
+        directory.
 
     CLI Example:
 
@@ -264,22 +304,34 @@ def chhome(name, home, persist=False):
         salt '*' user.chhome foo /home/users/foo True
     '''
     pre_info = info(name)
+    if not pre_info:
+        raise CommandExecutionError(
+            'User \'{0}\' does not exist'.format(name)
+        )
     if home == pre_info['home']:
         return True
-    cmd = 'pw usermod {0} -d {1}'.format(name, home)
+    cmd = ['pw', 'usermod', name, '-d', home]
     if persist:
-        cmd += ' -m '
+        cmd.append('-m')
     __salt__['cmd.run'](cmd, python_shell=False)
-    post_info = info(name)
-    if post_info['home'] != pre_info['home']:
-        return post_info['home'] == home
-    return False
+    return info(name).get('home') == home
 
 
 def chgroups(name, groups, append=False):
     '''
-    Change the groups this user belongs to, add append to append the specified
+    Change the groups to which a user belongs
+
+    name
+        Username to modify
+
     groups
+        List of groups to set for the user. Can be passed as a comma-separated
+        list or a Python list.
+
+    append : False
+        Set to ``True`` to append these groups to the user's existing list of
+        groups. Otherwise, the specified groups will replace any existing
+        groups for the user.
 
     CLI Example:
 
@@ -294,8 +346,8 @@ def chgroups(name, groups, append=False):
         return True
     if append:
         groups += ugrps
-    cmd = 'pw usermod -G {0} -n {1}'.format(','.join(groups), name)
-    return not __salt__['cmd.retcode'](cmd, python_shell=False)
+    cmd = ['pw', 'usermod', '-G', ','.join(groups), '-n', name]
+    return __salt__['cmd.retcode'](cmd, python_shell=False) == 0
 
 
 def chfullname(name, fullname):
@@ -308,20 +360,7 @@ def chfullname(name, fullname):
 
         salt '*' user.chfullname foo "Foo Bar"
     '''
-    fullname = str(fullname)
-    pre_info = _get_gecos(name)
-    if not pre_info:
-        return False
-    if fullname == pre_info['fullname']:
-        return True
-    gecos_field = copy.deepcopy(pre_info)
-    gecos_field['fullname'] = fullname
-    cmd = 'pw usermod {0} -c "{1}"'.format(name, _build_gecos(gecos_field))
-    __salt__['cmd.run'](cmd, python_shell=False)
-    post_info = info(name)
-    if post_info['fullname'] != pre_info['fullname']:
-        return post_info['fullname'] == fullname
-    return False
+    return _update_gecos(name, 'fullname', fullname)
 
 
 def chroomnumber(name, roomnumber):
@@ -334,20 +373,7 @@ def chroomnumber(name, roomnumber):
 
         salt '*' user.chroomnumber foo 123
     '''
-    roomnumber = str(roomnumber)
-    pre_info = _get_gecos(name)
-    if not pre_info:
-        return False
-    if roomnumber == pre_info['roomnumber']:
-        return True
-    gecos_field = copy.deepcopy(pre_info)
-    gecos_field['roomnumber'] = roomnumber
-    cmd = 'pw usermod {0} -c "{1}"'.format(name, _build_gecos(gecos_field))
-    __salt__['cmd.run'](cmd, python_shell=False)
-    post_info = info(name)
-    if post_info['roomnumber'] != pre_info['roomnumber']:
-        return post_info['roomnumber'] == roomnumber
-    return False
+    return _update_gecos(name, 'roomnumber', roomnumber)
 
 
 def chworkphone(name, workphone):
@@ -360,20 +386,7 @@ def chworkphone(name, workphone):
 
         salt '*' user.chworkphone foo "7735550123"
     '''
-    workphone = str(workphone)
-    pre_info = _get_gecos(name)
-    if not pre_info:
-        return False
-    if workphone == pre_info['workphone']:
-        return True
-    gecos_field = copy.deepcopy(pre_info)
-    gecos_field['workphone'] = workphone
-    cmd = 'pw usermod {0} -c "{1}"'.format(name, _build_gecos(gecos_field))
-    __salt__['cmd.run'](cmd, python_shell=False)
-    post_info = info(name)
-    if post_info['workphone'] != pre_info['workphone']:
-        return post_info['workphone'] == workphone
-    return False
+    return _update_gecos(name, 'workphone', workphone)
 
 
 def chhomephone(name, homephone):
@@ -386,20 +399,30 @@ def chhomephone(name, homephone):
 
         salt '*' user.chhomephone foo "7735551234"
     '''
-    homephone = str(homephone)
-    pre_info = _get_gecos(name)
-    if not pre_info:
-        return False
-    if homephone == pre_info['homephone']:
+    return _update_gecos(name, 'homephone', homephone)
+
+
+def chloginclass(name, loginclass, root=None):
+    '''
+    Change the default login class of the user
+
+    .. versionadded:: 2016.3.5
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' user.chloginclass foo staff
+    '''
+    if loginclass == get_loginclass(name):
         return True
-    gecos_field = copy.deepcopy(pre_info)
-    gecos_field['homephone'] = homephone
-    cmd = 'pw usermod {0} -c "{1}"'.format(name, _build_gecos(gecos_field))
+
+    cmd = ['pw', 'usermod', '-L', '{0}'.format(loginclass),
+           '-n', '{0}'.format(name)]
+
     __salt__['cmd.run'](cmd, python_shell=False)
-    post_info = info(name)
-    if post_info['homephone'] != pre_info['homephone']:
-        return post_info['homephone'] == homephone
-    return False
+
+    return get_loginclass(name) == loginclass
 
 
 def info(name):
@@ -440,7 +463,7 @@ def get_loginclass(name):
     '''
     Get the login class of the user
 
-    .. versionadded:: Boron
+    .. versionadded:: 2016.3.0
 
     CLI Example:
 
@@ -450,10 +473,10 @@ def get_loginclass(name):
 
     '''
 
-    userinfo = __salt__['cmd.run_stdout']('pw usershow -n {0}'.format(name))
+    userinfo = __salt__['cmd.run_stdout'](['pw', 'usershow', '-n', name])
     userinfo = userinfo.split(':')
 
-    return {'loginclass': userinfo[4] if len(userinfo) == 10 else ''}
+    return userinfo[4] if len(userinfo) == 10 else ''
 
 
 def list_groups(name):
@@ -466,7 +489,7 @@ def list_groups(name):
 
         salt '*' user.list_groups foo
     '''
-    return salt.utils.get_group_list(name)
+    return salt.utils.user.get_group_list(name)
 
 
 def list_users():
@@ -494,11 +517,13 @@ def rename(name, new_name):
     '''
     current_info = info(name)
     if not current_info:
-        raise CommandExecutionError('User {0!r} does not exist'.format(name))
+        raise CommandExecutionError('User \'{0}\' does not exist'.format(name))
     new_info = info(new_name)
     if new_info:
-        raise CommandExecutionError('User {0!r} already exists'.format(new_name))
-    cmd = 'pw usermod -l {0} -n {1}'.format(new_name, name)
+        raise CommandExecutionError(
+            'User \'{0}\' already exists'.format(new_name)
+        )
+    cmd = ['pw', 'usermod', '-l', new_name, '-n', name]
     __salt__['cmd.run'](cmd)
     post_info = info(new_name)
     if post_info['name'] != current_info['name']:

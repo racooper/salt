@@ -5,10 +5,10 @@ performance of the minions, right from the master!
 It measures various system parameters such as
 CPU, Memory, File I/O, Threads and Mutex.
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals, print_function
 
 import re
-import salt.utils
+import salt.utils.path
 from salt.ext.six.moves import zip
 
 
@@ -17,9 +17,9 @@ def __virtual__():
     loads the module, if only sysbench is installed
     '''
     # finding the path of the binary
-    if salt.utils.which('sysbench'):
+    if salt.utils.path.which('sysbench'):
         return 'sysbench'
-    return False
+    return (False, 'The sysbench execution module failed to load: the sysbench binary is not in the path.')
 
 
 def _parser(result):

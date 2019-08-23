@@ -20,7 +20,7 @@ returns it as a dictionary so that an execution of an operation can then be veri
 
 In order to run each function, jboss_config dictionary with the following properties must be passed:
  * cli_path: the path to jboss-cli script, for example: '/opt/jboss/jboss-7.0/bin/jboss-cli.sh'
- * controller: the ip addres and port of controller, for example: 10.11.12.13:9999
+ * controller: the IP address and port of controller, for example: 10.11.12.13:9999
  * cli_user: username to connect to jboss administration console if necessary
  * cli_password: password to connect to jboss administration console if necessary
 
@@ -37,7 +37,7 @@ Example:
 '''
 
 # Import Python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 import logging
 import re
 import pprint
@@ -47,7 +47,7 @@ import time
 from salt.exceptions import CommandExecutionError
 
 # Import 3rd-party libs
-import salt.ext.six as six
+from salt.ext import six
 
 log = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ def run_command(jboss_config, command, fail_on_error=True):
     command
            Command to execute against jboss instance
     fail_on_error (default=True)
-           Is true, raise CommandExecutionException exception if execution fails.
+           Is true, raise CommandExecutionError exception if execution fails.
            If false, 'success' property of the returned dictionary is set to False
 
     CLI Example:
@@ -93,7 +93,7 @@ def run_operation(jboss_config, operation, fail_on_error=True, retries=1):
            An operation to execute against jboss instance
 
     fail_on_error (default=True)
-           Is true, raise CommandExecutionException exception if execution fails.
+           Is true, raise CommandExecutionError exception if execution fails.
            If false, 'success' property of the returned dictionary is set to False
     retries:
            Number of retries in case of "JBAS012144: Could not connect to remote" error.
@@ -118,6 +118,7 @@ def run_operation(jboss_config, operation, fail_on_error=True, retries=1):
             cli_result['success'] = False
             match = re.search(r'^(JBAS\d+):', cli_result['failure-description'])
             cli_result['err_code'] = match.group(1)
+            cli_result['stdout'] = cli_command_result['stdout']
         else:
             if fail_on_error:
                 raise CommandExecutionError('''Command execution failed, return code={retcode}, stdout='{stdout}', stderr='{stderr}' '''.format(**cli_command_result))
@@ -145,7 +146,7 @@ def __call_cli(jboss_config, command, retries=1):
     cli_script = ' '.join(command_segments)
 
     cli_command_result = __salt__['cmd.run_all'](cli_script)
-    log.debug('cli_command_result=%s', str(cli_command_result))
+    log.debug('cli_command_result=%s', cli_command_result)
 
     log.debug('========= STDOUT:\n%s', cli_command_result['stdout'])
     log.debug('========= STDERR:\n%s', cli_command_result['stderr'])
@@ -230,7 +231,7 @@ def _parse(cli_output):
     tokens = __tokenize(cli_output)
     result = __process_tokens(tokens)
 
-    log.debug("=== RESULT: "+pprint.pformat(result))
+    log.debug('=== RESULT: %s', pprint.pformat(result))
     return result
 
 
@@ -243,7 +244,7 @@ def __process_tokens_internal(tokens, start_at=0):
     if __is_dict_start(tokens[start_at]) and start_at == 0:  # the top object
         return __process_tokens_internal(tokens, start_at=1)
 
-    log.debug("__process_tokens, start_at="+str(start_at))
+    log.debug("__process_tokens, start_at=%s", start_at)
     token_no = start_at
     result = {}
     current_key = None
@@ -262,22 +263,22 @@ def __process_tokens_internal(tokens, start_at=0):
         elif __is_datatype(token):
             log.debug("    TYPE: DATATYPE: %s ", token)
             result[current_key] = __get_datatype(token)
-            log.debug("    %s -> %s", current_key, str(result[current_key]))
+            log.debug("    %s -> %s", current_key, result[current_key])
             current_key = None
         elif __is_boolean(token):
             log.debug("    TYPE: BOOLEAN ")
             result[current_key] = __get_boolean(token)
-            log.debug("    %s -> %s", current_key, str(result[current_key]))
+            log.debug("    %s -> %s", current_key, result[current_key])
             current_key = None
         elif __is_int(token):
             log.debug("    TYPE: INT ")
             result[current_key] = __get_int(token)
-            log.debug("    %s -> %s", current_key, str(result[current_key]))
+            log.debug("    %s -> %s", current_key, result[current_key])
             current_key = None
         elif __is_long(token):
             log.debug("    TYPE: LONG ")
             result[current_key] = __get_long(token)
-            log.debug("    %s -> %s", current_key, str(result[current_key]))
+            log.debug("    %s -> %s", current_key, result[current_key])
             current_key = None
         elif __is_undefined(token):
             log.debug("    TYPE: UNDEFINED ")
@@ -289,7 +290,7 @@ def __process_tokens_internal(tokens, start_at=0):
             dict_value, token_no = __process_tokens_internal(tokens, start_at=token_no+1)
             log.debug("    DICT = %s ", dict_value)
             result[current_key] = dict_value
-            log.debug("    %s -> %s", current_key, str(result[current_key]))
+            log.debug("    %s -> %s", current_key, result[current_key])
             current_key = None
         elif __is_dict_end(token):
             log.debug("    TYPE: DICT END")
@@ -297,8 +298,11 @@ def __process_tokens_internal(tokens, start_at=0):
         elif __is_assignment(token):
             log.debug("    TYPE: ASSIGNMENT")
             is_assignment = True
+        elif __is_expression(token):
+            log.debug("    TYPE: EXPRESSION")
+            is_expression = True
         else:
-            raise CommandExecutionError('Unknown token!', 'Token:'+token)
+            raise CommandExecutionError('Unknown token! Token: {0}'.format(token))
 
         token_no = token_no + 1
 
@@ -308,7 +312,7 @@ def __tokenize(cli_output):
     # \\ means a single backslash here
     tokens_re = re.compile(r'("(?:[^"\\]|\\"|\\\\)*"|=>|{|}|true|false|undefined|[0-9A-Za-z]+)', re.DOTALL)
     tokens = tokens_re.findall(cli_output)
-    log.debug("tokens=%s", str(tokens))
+    log.debug("tokens=%s", tokens)
     return tokens
 
 
@@ -342,13 +346,13 @@ def __is_long(token):
 
 def __get_long(token):
     if six.PY2:
-        return long(token[0:-1])  # pylint: disable=incompatible-py3-code
+        return long(token[0:-1])  # pylint: disable=incompatible-py3-code,undefined-variable
     else:
         return int(token[0:-1])
 
 
 def __is_datatype(token):
-    return token in ("INT", "BOOLEAN", "STRING", "OBJECT")
+    return token in ("INT", "BOOLEAN", "STRING", "OBJECT", "LONG")
 
 
 def __get_datatype(token):
@@ -371,3 +375,7 @@ def __get_quoted_string(token):
 
 def __is_assignment(token):
     return token == '=>'
+
+
+def __is_expression(token):
+    return token == 'expression'

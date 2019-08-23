@@ -1,143 +1,111 @@
 .. _installation-debian:
 
-===================
-Debian Installation
-===================
+===========================
+Debian GNU/Linux / Raspbian
+===========================
+
+Debian GNU/Linux distribution and some derivatives such as Raspbian already
+have included Salt packages to their repositories. However, current stable
+Debian release contains old outdated Salt releases. It is
+recommended to use SaltStack repository for Debian as described
+:ref:`below <installation-debian-repo>`.
+
+Installation from official Debian and Raspbian repositories is described
+:ref:`here <installation-debian-raspbian>`.
 
 .. _installation-debian-repo:
 
-Installation from the SaltStack Repository
-==========================================
+Installation from the Official SaltStack Repository
+===================================================
 
-Debian 8 packages are available in the SaltStack Debian repository.
+Packages for Debian 9 (Stretch) and Debian 8 (Jessie) are available in the
+Official SaltStack repository.
 
-To install using the SaltStack Debian repository:
-
-#. Run the following command to import the SaltStack repository key:
-
-   .. code-block:: bash
-
-       wget -O - https://repo.saltstack.com/apt/debian/SALTSTACK-GPG-KEY.pub | sudo apt-key add -
-
-#. Add the following line to ``/etc/apt/sources.list``:
-
-   .. code-block:: bash
-
-       deb http://repo.saltstack.com/apt/debian jessie contrib
-
-#. Run ``sudo apt-get update``
-
-#. Install the salt-minion, salt-master, or other Salt components:
-
-   - ``apt-get install salt-master``
-   - ``apt-get install salt-minion``
-   - ``apt-get install salt-ssh``
-   - ``apt-get install salt-syndic``
-   - ``apt-get install salt-cloud``
-
-Configure Apt
--------------
-
-Currently the latest packages for Debian Old Stable, Stable, and
-Unstable (Squeeze, Wheezy, and Sid) are published in our
-(saltstack.com) Debian repository.
-
-Squeeze (Old Old Stable)
-------------------------
-
-For squeeze, you will need to enable the Debian backports repository
-as well as the debian.saltstack.com repository. To do so, add the
-following to ``/etc/apt/sources.list`` or a file in
-``/etc/apt/sources.list.d``:
-
-.. code-block:: bash
-
-    deb http://debian.saltstack.com/debian squeeze-saltstack main
-    deb http://backports.debian.org/debian-backports squeeze-backports main
-
-
-
-Wheezy (Old Stable)
--------------------
-
-For wheezy, the following line is needed in either
-``/etc/apt/sources.list`` or a file in ``/etc/apt/sources.list.d``:
-
-.. code-block:: bash
-
-    deb http://debian.saltstack.com/debian wheezy-saltstack main
-
-Jessie (Stable)
----------------
-
-For jessie, the following line is needed in either
-``/etc/apt/sources.list`` or a file in ``/etc/apt/sources.list.d``:
-
-.. code-block:: bash
-
-    deb http://debian.saltstack.com/debian jessie-saltstack main
-
-Sid (Unstable)
---------------
-
-For sid, the following line is needed in either
-``/etc/apt/sources.list`` or a file in ``/etc/apt/sources.list.d``:
-
-.. code-block:: bash
-
-    deb http://debian.saltstack.com/debian unstable main
-
-
-Import the repository key.
---------------------------
-
-You will need to import the key used for signing.
-
-.. code-block:: bash
-
-    wget -q -O- "http://debian.saltstack.com/debian-salt-team-joehealy.gpg.key" | apt-key add -
+Instructions are at https://repo.saltstack.com/#debian.
 
 .. note::
+    Regular security support for Debian 7 ended on April 25th 2016. As a result,
+    2016.3.1 and 2015.8.10 will be the last Salt releases for which Debian
+    7 packages are created.
 
-    You can optionally verify the key integrity with ``sha512sum`` using the
-    public key signature shown here. E.g:
+.. _installation-debian-raspbian:
 
-    .. code-block:: bash
+Installation from the Debian / Raspbian Official Repository
+===========================================================
 
-        echo "b702969447140d5553e31e9701be13ca11cc0a7ed5fe2b30acb8491567560ee62f834772b5095d735dfcecb2384a5c1a20045f52861c417f50b68dd5ff4660e6  debian-salt-team-joehealy.gpg.key" | sha512sum -c
+The Debian distributions contain mostly old Salt packages
+built by the Debian Salt Team. You can install Salt
+components directly from Debian but it is recommended to
+use the instructions above for the packages from the official
+Salt repository.
 
-Update the package database
----------------------------
+On Jessie there is an option to install Salt minion from Stretch with
+`python-tornado` dependency from `jessie-backports` repositories.
 
-.. code-block:: bash
+To install fresh release of Salt minion on Jessie:
 
-    apt-get update
+#. Add `jessie-backports` and `stretch` repositories:
 
+   **Debian**:
 
-Install packages
-----------------
+   .. code-block:: bash
 
-Install the Salt master, minion, or syndic from the repository with the apt-get
-command. These examples each install one daemon, but more than one package name
-may be given at a time:
+       echo 'deb http://httpredir.debian.org/debian jessie-backports main' >> /etc/apt/sources.list
+       echo 'deb http://httpredir.debian.org/debian stretch main' >> /etc/apt/sources.list
 
-.. code-block:: bash
+   **Raspbian**:
 
-    apt-get install salt-master
+   .. code-block:: bash
 
-.. code-block:: bash
+       echo 'deb http://archive.raspbian.org/raspbian/ stretch main' >> /etc/apt/sources.list
 
-    apt-get install salt-minion
+#. Make Jessie a default release:
 
-.. code-block:: bash
+   .. code-block:: bash
 
-    apt-get install salt-syndic
+       echo 'APT::Default-Release "jessie";' > /etc/apt/apt.conf.d/10apt
 
-.. _Debian-config:
+#. Install Salt dependencies:
+
+   **Debian**:
+
+   .. code-block:: bash
+
+       apt-get update
+       apt-get install python-zmq python-systemd/jessie-backports python-tornado/jessie-backports salt-common/stretch
+
+   **Raspbian**:
+
+   .. code-block:: bash
+
+       apt-get update
+       apt-get install python-zmq python-tornado/stretch salt-common/stretch
+
+#. Install Salt minion package from Latest Debian Release:
+
+   .. code-block:: bash
+
+       apt-get install salt-minion/stretch
+
+.. _debian-install-pkgs:
+
+Install Packages
+================
+
+Install the Salt master, minion or other packages from the repository with
+the `apt-get` command. These examples each install one of Salt components, but
+more than one package name may be given at a time:
+
+- ``apt-get install salt-api``
+- ``apt-get install salt-cloud``
+- ``apt-get install salt-master``
+- ``apt-get install salt-minion``
+- ``apt-get install salt-ssh``
+- ``apt-get install salt-syndic``
+
+.. _debian-config:
 
 Post-installation tasks
------------------------
+=======================
 
-Now, go to the :doc:`Configuring Salt </ref/configuration/index>` page.
-
-
+Now, go to the :ref:`Configuring Salt <configuring-salt>` page.

@@ -14,11 +14,7 @@ improvements to the ZeroMQ systems.
 Download!
 ---------
 
-The Salt source can be downloaded from the salt GitHub site:
-
-:download:`salt-0.9.0.tar.gz`
-
-Or from PyPI:
+The Salt source can be downloaded from PyPI:
 
 https://pypi.python.org/packages/source/s/salt/salt-0.9.0.tar.gz
 
@@ -49,8 +45,8 @@ to act as a communication channel between minions and as a general
 infrastructure message bus.
 
 Peer communication is turned off by default but can be enabled via the ``peer``
-option in the master configuration file. Documentation on the new :doc:`Peer
-interface </ref/peer>`.
+option in the master configuration file. Documentation on the new :ref:`Peer
+interface <peer>`.
 
 Easily Extensible API
 `````````````````````

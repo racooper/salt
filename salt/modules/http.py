@@ -5,9 +5,12 @@ like, but also useful for basic http testing.
 
 .. versionadded:: 2015.5.0
 '''
-from __future__ import absolute_import
 
-# Import salt libs
+# Import Python libs
+from __future__ import absolute_import, print_function, unicode_literals
+import time
+
+# Import Salt libs
 import salt.utils.http
 
 
@@ -15,7 +18,10 @@ def query(url, **kwargs):
     '''
     Query a resource, and decode the return data
 
-    .. versionadded:: 2015.5.0
+    Passes through all the parameters described in the
+    :py:func:`utils.http.query function <salt.utils.http.query>`:
+
+    .. autofunction:: salt.utils.http.query
 
     CLI Example:
 
@@ -26,8 +32,47 @@ def query(url, **kwargs):
             params='key1=val1&key2=val2'
         salt '*' http.query http://somelink.com/ method=POST \
             data='<xml>somecontent</xml>'
+
+    For more information about the ``http.query`` module, refer to the
+    :ref:`HTTP Tutorial <tutorial-http>`.
     '''
-    return salt.utils.http.query(url=url, opts=__opts__, **kwargs)
+    opts = __opts__.copy()
+    if 'opts' in kwargs:
+        opts.update(kwargs['opts'])
+        del kwargs['opts']
+
+    return salt.utils.http.query(url=url, opts=opts, **kwargs)
+
+
+def wait_for_successful_query(url, wait_for=300, **kwargs):
+    '''
+    Query a resource until a successful response, and decode the return data
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' http.wait_for_successful_query http://somelink.com/ wait_for=160
+    '''
+
+    starttime = time.time()
+
+    while True:
+        caught_exception = None
+        result = None
+        try:
+            result = query(url=url, **kwargs)
+            if not result.get('Error') and not result.get('error'):
+                return result
+        except Exception as exc:
+            caught_exception = exc
+
+        if time.time() > starttime + wait_for:
+            if not result and caught_exception:
+                # workaround pylint bug https://www.logilab.org/ticket/3207
+                raise caught_exception  # pylint: disable=E0702
+
+            return result
 
 
 def update_ca_bundle(target=None, source=None, merge_files=None):

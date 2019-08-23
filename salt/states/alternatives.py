@@ -4,7 +4,7 @@ Configuration of the alternatives system
 
 Control the alternatives system
 
-.. code-block:: yaml
+.. code-block:: jinja
 
   {% set my_hadoop_conf = '/opt/hadoop/conf' %}
 
@@ -22,15 +22,23 @@ Control the alternatives system
 
   hadoop-0.20-conf:
     alternatives.remove:
-        - name: hadoop-0.20-conf
-        - path: {{ my_hadoop_conf }}
+      - name: hadoop-0.20-conf
+      - path: {{ my_hadoop_conf }}
 
 '''
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Define a function alias in order not to shadow built-in's
 __func_alias__ = {
     'set_': 'set'
 }
+
+
+def __virtual__():
+    '''
+    Only load if alternatives execution module is available.
+    '''
+    return True if 'alternatives.auto' in __salt__ else False
 
 
 def install(name, link, path, priority):
@@ -62,25 +70,36 @@ def install(name, link, path, priority):
            'changes': {},
            'comment': ''}
 
-    isinstalled = __salt__['alternatives.check_installed'](name, path)
-    if not isinstalled:
+    if __salt__['alternatives.check_exists'](name, path):
+        ret['comment'] = 'Alternative {0} for {1} is already registered'.format(path, name)
+    else:
         if __opts__['test']:
             ret['comment'] = (
                 'Alternative will be set for {0} to {1} with priority {2}'
             ).format(name, path, priority)
             ret['result'] = None
             return ret
-        __salt__['alternatives.install'](name, link, path, priority)
-        ret['comment'] = (
-            'Setting alternative for {0} to {1} with priority {2}'
-        ).format(name, path, priority)
-        ret['changes'] = {'name': name,
-                          'link': link,
-                          'path': path,
-                          'priority': priority}
-        return ret
 
-    ret['comment'] = 'Alternatives for {0} is already set to {1}'.format(name, path)
+        out = __salt__['alternatives.install'](name, link, path, priority)
+        if __salt__['alternatives.check_exists'](name, path):
+            if __salt__['alternatives.check_installed'](name, path):
+                ret['comment'] = (
+                    'Alternative for {0} set to path {1} with priority {2}'
+                ).format(name, path, priority)
+            else:
+                ret['comment'] = (
+                    'Alternative {0} for {1} registered with priority {2} and not set to default'
+                ).format(path, name, priority)
+            ret['changes'] = {'name': name,
+                              'link': link,
+                              'path': path,
+                              'priority': priority}
+        else:
+            ret['result'] = False
+            ret['comment'] = (
+                'Alternative for {0} not installed: {1}'
+            ).format(name, out)
+
     return ret
 
 
@@ -103,7 +122,7 @@ def remove(name, path):
            'changes': {},
            'comment': ''}
 
-    isinstalled = __salt__['alternatives.check_installed'](name, path)
+    isinstalled = __salt__['alternatives.check_exists'](name, path)
     if isinstalled:
         if __opts__['test']:
             ret['comment'] = ('Alternative for {0} will be removed'
@@ -185,6 +204,12 @@ def set_(name, path):
     path
         is the location of one of the alternative target files.
         (e.g. /usr/bin/less)
+
+    .. code-block:: yaml
+
+        foo:
+          alternatives.set:
+            - path: /usr/bin/foo-2.0
     '''
     ret = {'name': name,
            'path': path,
@@ -208,13 +233,12 @@ def set_(name, path):
         if __opts__['test']:
             ret['comment'] = (
                 'Alternative for {0} will be set to path {1}'
-            ).format(name, current)
+            ).format(name, path)
             ret['result'] = None
             return ret
         __salt__['alternatives.set'](name, path)
         current = __salt__['alternatives.show_current'](name)
         if current == path:
-            ret['result'] = True
             ret['comment'] = (
                 'Alternative for {0} set to path {1}'
             ).format(name, current)

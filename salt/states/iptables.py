@@ -5,7 +5,7 @@ Management of iptables
 
 This is an iptables-specific module designed to manage Linux firewalls. It is
 expected that this state module, and other system-specific firewall states, may
-at some point be deprecated in favor of a more generic `firewall` state.
+at some point be deprecated in favor of a more generic ``firewall`` state.
 
 .. code-block:: yaml
 
@@ -17,7 +17,7 @@ at some point be deprecated in favor of a more generic `firewall` state.
         - match: state
         - connstate: NEW
         - dport: 80
-        - proto: tcp
+        - protocol: tcp
         - sport: 1025:65535
         - save: True
 
@@ -32,7 +32,7 @@ at some point be deprecated in favor of a more generic `firewall` state.
         - comment: "Allow HTTP"
         - connstate: NEW
         - dport: 80
-        - proto: tcp
+        - protocol: tcp
         - sport: 1025:65535
         - save: True
 
@@ -48,7 +48,7 @@ at some point be deprecated in favor of a more generic `firewall` state.
         - connstate: NEW
         - source: '127.0.0.1'
         - dport: 80
-        - proto: tcp
+        - protocol: tcp
         - sport: 1025:65535
         - save: True
 
@@ -65,7 +65,7 @@ at some point be deprecated in favor of a more generic `firewall` state.
         - connstate: NEW
         - source: '! 127.0.0.1'
         - dport: 80
-        - proto: tcp
+        - protocol: tcp
         - sport: 1025:65535
         - save: True
 
@@ -81,7 +81,7 @@ at some point be deprecated in favor of a more generic `firewall` state.
         - connstate: NEW
         - source: 'not 127.0.0.1'
         - dport: 80
-        - proto: tcp
+        - protocol: tcp
         - sport: 1025:65535
         - save: True
 
@@ -94,7 +94,7 @@ at some point be deprecated in favor of a more generic `firewall` state.
         - match: state
         - connstate: NEW
         - dport: 80
-        - proto: tcp
+        - protocol: tcp
         - sport: 1025:65535
         - save: True
 
@@ -109,7 +109,7 @@ at some point be deprecated in favor of a more generic `firewall` state.
         - dports:
             - 80
             - 443
-        - proto: tcp
+        - protocol: tcp
         - sport: 1025:65535
         - save: True
 
@@ -122,7 +122,7 @@ at some point be deprecated in favor of a more generic `firewall` state.
         - match: state
         - connstate: NEW
         - dport: 80
-        - proto: tcp
+        - protocol: tcp
         - sport: 1025:65535
         - save: True
 
@@ -136,7 +136,7 @@ at some point be deprecated in favor of a more generic `firewall` state.
         - match: state
         - connstate: NEW
         - dport: 80
-        - proto: tcp
+        - protocol: tcp
         - sport: 1025:65535
         - save: True
 
@@ -148,7 +148,7 @@ at some point be deprecated in favor of a more generic `firewall` state.
         - match: state
         - connstate: NEW
         - dport: 80
-        - proto: tcp
+        - protocol: tcp
         - sport: 1025:65535
         - save: True
 
@@ -161,7 +161,7 @@ at some point be deprecated in favor of a more generic `firewall` state.
         - match: state
         - connstate: NEW
         - dport: 80
-        - proto: tcp
+        - protocol: tcp
         - sport: 1025:65535
         - save: True
 
@@ -174,7 +174,7 @@ at some point be deprecated in favor of a more generic `firewall` state.
         - match: state
         - connstate: NEW
         - dport: 80
-        - proto: tcp
+        - protocol: tcp
         - sport: 1025:65535
         - save: True
 
@@ -185,16 +185,64 @@ at some point be deprecated in favor of a more generic `firewall` state.
 
 .. note::
 
+    Whereas iptables will accept ``-p``, ``--proto[c[o[l]]]`` as synonyms of
+    ``--protocol``, if ``--proto`` appears in an iptables command after the
+    appearance of ``-m policy``, it is interpreted as the ``--proto`` option of
+    the policy extension (see the iptables-extensions(8) man page).
+
+Example rules for IPSec policy:
+
+.. code-block:: yaml
+
+    accept_esp_in:
+      iptables.append:
+        - table: filter
+        - chain: INPUT
+        - jump: ACCEPT
+        - source: 10.20.0.0/24
+        - destination: 10.10.0.0/24
+        - in-interface: eth0
+        - match: policy
+        - dir: in
+        - pol: ipsec
+        - reqid: 1
+        - proto: esp
+    accept_esp_forward_in:
+      iptables.append:
+        - use:
+          - iptables: accept_esp_in
+        - chain: FORWARD
+
+    accept_esp_out:
+      iptables.append:
+        - table: filter
+        - chain: OUTPUT
+        - jump: ACCEPT
+        - source: 10.10.0.0/24
+        - destination: 10.20.0.0/24
+        - out-interface: eth0
+        - match: policy
+        - dir: out
+        - pol: ipsec
+        - reqid: 1
+        - proto: esp
+    accept_esp_forward_out:
+      iptables.append:
+        - use:
+          - iptables: accept_esp_out
+        - chain: FORWARD
+
+.. note::
+
     Various functions of the ``iptables`` module use the ``--check`` option. If
     the version of ``iptables`` on the target system does not include this
     option, an alternate version of this check will be performed using the
     output of iptables-save. This may have unintended consequences on legacy
     releases of ``iptables``.
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals, print_function
 
 # Import salt libs
-import salt.utils
 from salt.state import STATE_INTERNAL_KEYWORDS as _STATE_INTERNAL_KEYWORDS
 
 
@@ -314,7 +362,7 @@ def append(name, table='filter', family='ipv4', **kwargs):
     '''
     .. versionadded:: 0.17.0
 
-    Append a rule to a chain
+    Add a rule to the end of the specified chain.
 
     name
         A user-defined name to call this rule by in another part of a state or
@@ -373,6 +421,7 @@ def append(name, table='filter', family='ipv4', **kwargs):
         if ignore in kwargs:
             del kwargs[ignore]
     kwargs['name'] = name
+    kwargs['table'] = table
     rule = __salt__['iptables.build_rule'](family=family, **kwargs)
     command = __salt__['iptables.build_rule'](full='True', family=family, command='A', **kwargs)
     if __salt__['iptables.check'](table,
@@ -453,6 +502,10 @@ def insert(name, table='filter', family='ipv4', **kwargs):
     family
         Networking family, either ipv4 or ipv6
 
+    position
+        The numerical representation of where the rule should be inserted into
+        the chain. Note that ``-1`` is not a supported position value.
+
     All other arguments are passed in with the same name as the long option
     that would normally be used for iptables, with one exception: ``--state`` is
     specified as `connstate` instead of `state` (not to be confused with
@@ -500,6 +553,7 @@ def insert(name, table='filter', family='ipv4', **kwargs):
         if ignore in kwargs:
             del kwargs[ignore]
     kwargs['name'] = name
+    kwargs['table'] = table
     rule = __salt__['iptables.build_rule'](family=family, **kwargs)
     command = __salt__['iptables.build_rule'](full=True, family=family, command='I', **kwargs)
     if __salt__['iptables.check'](table,
@@ -622,6 +676,7 @@ def delete(name, table='filter', family='ipv4', **kwargs):
         if ignore in kwargs:
             del kwargs[ignore]
     kwargs['name'] = name
+    kwargs['table'] = table
     rule = __salt__['iptables.build_rule'](family=family, **kwargs)
     command = __salt__['iptables.build_rule'](full=True, family=family, command='D', **kwargs)
 
@@ -767,9 +822,6 @@ def flush(name, table='filter', family='ipv4', **kwargs):
         if ignore in kwargs:
             del kwargs[ignore]
 
-    if 'table' not in kwargs:
-        table = 'filter'
-
     if 'chain' not in kwargs:
         kwargs['chain'] = ''
     if __opts__['test']:
@@ -806,7 +858,7 @@ def mod_aggregate(low, chunks, running):
     if low.get('fun') not in agg_enabled:
         return low
     for chunk in chunks:
-        tag = salt.utils.gen_state_tag(chunk)
+        tag = __utils__['state.gen_tag'](chunk)
         if tag in running:
             # Already ran the iptables state, skip aggregation
             continue

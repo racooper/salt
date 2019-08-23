@@ -2,14 +2,16 @@
 '''
 Support for poudriere
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import python libs
 import os
 import logging
 
 # Import salt libs
-import salt.utils
+import salt.utils.files
+import salt.utils.path
+import salt.utils.stringutils
 
 log = logging.getLogger(__name__)
 
@@ -18,10 +20,10 @@ def __virtual__():
     '''
     Module load on freebsd only and if poudriere installed
     '''
-    if __grains__['os'] == 'FreeBSD' and salt.utils.which('poudriere'):
+    if __grains__.get('os') == 'FreeBSD' and salt.utils.path.which('poudriere'):
         return 'poudriere'
     else:
-        return False
+        return (False, 'The poudriere execution module failed to load: only available on FreeBSD with the poudriere binary in the path.')
 
 
 def _config_file():
@@ -115,9 +117,9 @@ def parse_config(config_file=None):
         config_file = _config_file()
     ret = {}
     if _check_config_exists(config_file):
-        with salt.utils.fopen(config_file) as ifile:
+        with salt.utils.files.fopen(config_file) as ifile:
             for line in ifile:
-                key, val = line.split('=')
+                key, val = salt.utils.stringutils.to_unicode(line).split('=')
                 ret[key] = val
         return ret
 

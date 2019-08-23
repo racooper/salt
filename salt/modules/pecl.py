@@ -2,7 +2,7 @@
 '''
 Manage PHP pecl extensions.
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import python libs
 import re
@@ -14,7 +14,11 @@ except ImportError:
     from pipes import quote as _cmd_quote
 
 # Import salt libs
-import salt.utils
+import salt.utils.data
+import salt.utils.path
+
+# Import 3rd-party libs
+from salt.ext import six
 
 __func_alias__ = {
     'list_': 'list'
@@ -22,9 +26,15 @@ __func_alias__ = {
 
 log = logging.getLogger(__name__)
 
+# Define the module's virtual name
+__virtualname__ = 'pecl'
+
 
 def __virtual__():
-    return True if salt.utils.which('pecl') else False
+    if salt.utils.path.which('pecl'):
+        return __virtualname__
+    return (False, 'The pecl execution module not loaded: '
+            'pecl binary is not in the path.')
 
 
 def _pecl(command, defaults=False):
@@ -32,7 +42,7 @@ def _pecl(command, defaults=False):
     Execute the command passed with pecl
     '''
     cmdline = 'pecl {0}'.format(command)
-    if salt.utils.is_true(defaults):
+    if salt.utils.data.is_true(defaults):
         cmdline = 'yes ' "''" + ' | ' + cmdline
 
     ret = __salt__['cmd.run_all'](cmdline, python_shell=True)
@@ -67,6 +77,8 @@ def install(pecls, defaults=False, force=False, preferred_state='stable'):
 
         salt '*' pecl.install fuse
     '''
+    if isinstance(pecls, six.string_types):
+        pecls = [pecls]
     preferred_state = '-d preferred_state={0}'.format(_cmd_quote(preferred_state))
     if force:
         return _pecl('{0} install -f {1}'.format(preferred_state, _cmd_quote(' '.join(pecls))),
@@ -108,6 +120,8 @@ def uninstall(pecls):
 
         salt '*' pecl.uninstall fuse
     '''
+    if isinstance(pecls, six.string_types):
+        pecls = [pecls]
     return _pecl('uninstall {0}'.format(_cmd_quote(' '.join(pecls))))
 
 
@@ -124,6 +138,8 @@ def update(pecls):
 
         salt '*' pecl.update fuse
     '''
+    if isinstance(pecls, six.string_types):
+        pecls = [pecls]
     return _pecl('install -U {0}'.format(_cmd_quote(' '.join(pecls))))
 
 

@@ -1,3 +1,5 @@
+.. _best-practices:
+
 ============================
 Salt :index:`Best Practices`
 ============================
@@ -122,7 +124,22 @@ An example ``top.sls`` may be as simple as the following:
       '*':
         - packages
 
-Or much more complicated, using a variety of matchers:
+Any number of matchers can be added to the base environment. For example, here
+is an expanded version of the Pillar top file stated above:
+
+/srv/pillar/top.sls:
+
+.. code-block:: yaml
+
+    base:
+      '*':
+        - packages
+      'web*':
+        - apache
+        - vim
+
+Or an even more complicated example, using a variety of matchers in numerous
+environments:
 
 /srv/pillar/top.sls:
 
@@ -154,7 +171,7 @@ creates a consistent understanding throughout our Salt environment. Users can
 expect that pillar variables found in an Apache state will live inside of an
 Apache pillar:
 
-``/srv/salt/pillar/apache.sls``:
+``/srv/pillar/apache.sls``:
 
 .. code-block:: yaml
 
@@ -183,7 +200,7 @@ preferred:
 
 ``/srv/salt/apache/conf.sls``:
 
-.. code-block:: yaml
+.. code-block:: jinja
 
     {% set name = 'httpd' %}
     {% set tmpl = 'salt://apache/files/httpd.conf' %}
@@ -217,7 +234,7 @@ locations within a single state:
 
 ``/srv/salt/apache/conf.sls``:
 
-.. code-block:: yaml
+.. code-block:: jinja
 
     {% from "apache/map.jinja" import apache with context %}
 
@@ -250,7 +267,8 @@ is not very modular to one that is:
 .. code-block:: yaml
 
     httpd:
-      pkg.installed: []
+      pkg:
+        - installed
       service.running:
         - enable: True
 
@@ -314,7 +332,7 @@ modification of static values:
 
 ``/srv/salt/apache/map.jinja``:
 
-.. code-block:: yaml
+.. code-block:: jinja
 
     {% set apache = salt['grains.filter_by']({
         'Debian': {
@@ -340,7 +358,7 @@ modification of static values:
 
 ``/srv/salt/apache/init.sls``:
 
-.. code-block:: yaml
+.. code-block:: jinja
 
     {% from "apache/map.jinja" import apache with context %}
 
@@ -370,7 +388,7 @@ to be broken into two states.
 
 ``/srv/salt/apache/map.jinja``:
 
-.. code-block:: yaml
+.. code-block:: jinja
 
     {% set apache = salt['grains.filter_by']({
         'Debian': {
@@ -397,7 +415,7 @@ to be broken into two states.
 
 ``/srv/salt/apache/init.sls``:
 
-.. code-block:: yaml
+.. code-block:: jinja
 
     {% from "apache/map.jinja" import apache with context %}
 
@@ -410,7 +428,7 @@ to be broken into two states.
 
 ``/srv/salt/apache/conf.sls``:
 
-.. code-block:: yaml
+.. code-block:: jinja
 
     {% from "apache/map.jinja" import apache with context %}
 
@@ -504,7 +522,7 @@ the associated pillar:
 
 ``/srv/salt/mysql/testerdb.sls``:
 
-.. code-block:: yaml
+.. code-block:: jinja
 
     testdb:
       mysql_database.present:
@@ -512,7 +530,7 @@ the associated pillar:
 
 ``/srv/salt/mysql/user.sls``:
 
-.. code-block:: yaml
+.. code-block:: jinja
 
     include:
       - mysql.testerdb

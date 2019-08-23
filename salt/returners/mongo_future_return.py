@@ -5,9 +5,10 @@ Return data to a mongodb server
 Required python modules: pymongo
 
 
-This returner will send data from the minions to a MongoDB server. To
-configure the settings for your MongoDB server, add the following lines
-to the minion config files:
+This returner will send data from the minions to a MongoDB server. MongoDB
+server can be configured by using host, port, db, user and password settings
+or by connection string URI (for pymongo > 2.3). To configure the settings
+for your MongoDB server, add the following lines to the minion config files:
 
 .. code-block:: yaml
 
@@ -16,6 +17,29 @@ to the minion config files:
     mongo.user: <MongoDB username>
     mongo.password: <MongoDB user password>
     mongo.port: 27017
+
+Or single URI:
+
+.. code-block:: yaml
+
+   mongo.uri: URI
+
+where uri is in the format:
+
+.. code-block:: text
+
+    mongodb://[username:password@]host1[:port1][,host2[:port2],...[,hostN[:portN]]][/[database][?options]]
+
+Example:
+
+.. code-block:: text
+
+    mongodb://db1.example.net:27017/mydatabase
+    mongodb://db1.example.net:27017,db2.example.net:2500/?replicaSet=test
+    mongodb://db1.example.net:27017,db2.example.net:2500/?replicaSet=test&connectTimeoutMS=300000
+
+More information on URI format can be found in
+https://docs.mongodb.com/manual/reference/connection-string/
 
 You can also ask for indexes creation on the most common used fields, which
 should greatly improve performance. Indexes are not created by default.
@@ -36,6 +60,11 @@ the default location:
     alternative.mongo.password: <MongoDB user password>
     alternative.mongo.port: 27017
 
+Or single URI:
+
+.. code-block:: yaml
+
+   alternative.mongo.uri: URI
 
 This mongo returner is being developed to replace the default mongodb returner
 in the future and should not be considered API stable yet.
@@ -53,8 +82,17 @@ To use the alternative configuration, append '--return_config alternative' to th
 .. code-block:: bash
 
     salt '*' test.ping --return mongo --return_config alternative
+
+To override individual configuration items, append --return_kwargs '{"key:": "value"}' to the salt command.
+
+.. versionadded:: 2016.3.0
+
+.. code-block:: bash
+
+    salt '*' test.ping --return mongo --return_kwargs '{"db": "another-salt"}'
+
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import python libs
 import logging
@@ -62,14 +100,13 @@ import logging
 # Import Salt libs
 import salt.utils.jid
 import salt.returners
-import salt.ext.six as six
-
+from salt.ext import six
+from salt.utils.versions import LooseVersion as _LooseVersion
 
 # Import third party libs
 try:
     import pymongo
-    version = pymongo.version
-    version = '.'.join(version.split('.')[:2])
+    PYMONGO_VERSION = _LooseVersion(pymongo.version)
     HAS_PYMONGO = True
 except ImportError:
     HAS_PYMONGO = False
@@ -82,7 +119,7 @@ __virtualname__ = 'mongo'
 
 def __virtual__():
     if not HAS_PYMONGO:
-        return False
+        return False, 'Could not import mongo returner; pymongo is not installed.'
     return __virtualname__
 
 
@@ -107,7 +144,8 @@ def _get_options(ret=None):
              'db': 'db',
              'user': 'user',
              'password': 'password',
-             'indexes': 'indexes'}
+             'indexes': 'indexes',
+             'uri': 'uri'}
 
     _options = salt.returners.get_returner_options(__virtualname__,
                                                    ret,
@@ -125,25 +163,46 @@ def _get_conn(ret):
 
     host = _options.get('host')
     port = _options.get('port')
+    uri = _options.get('uri')
     db_ = _options.get('db')
     user = _options.get('user')
     password = _options.get('password')
     indexes = _options.get('indexes', False)
 
-    if float(version) > 2.3:
-        conn = pymongo.MongoClient(host, port)
+    # at some point we should remove support for
+    # pymongo versions < 2.3 until then there are
+    # a bunch of these sections that need to be supported
+    if uri and PYMONGO_VERSION > _LooseVersion('2.3'):
+        if uri and host:
+            raise salt.exceptions.SaltConfigurationError(
+                    "Mongo returner expects either uri or host configuration. Both were provided")
+        pymongo.uri_parser.parse_uri(uri)
+        conn = pymongo.MongoClient(uri)
+        mdb = conn.get_database()
     else:
-        conn = pymongo.Connection(host, port)
-    mdb = conn[db_]
+        if PYMONGO_VERSION > _LooseVersion('2.3'):
+            conn = pymongo.MongoClient(host, port)
+        else:
+            if uri:
+                raise salt.exceptions.SaltConfigurationError(
+                    "pymongo <= 2.3 does not support uri format")
+            conn = pymongo.Connection(host, port)
 
-    if user and password:
-        mdb.authenticate(user, password)
+        mdb = conn[db_]
+        if user and password:
+            mdb.authenticate(user, password)
 
     if indexes:
-        mdb.saltReturns.create_index('minion')
-        mdb.saltReturns.create_index('jid')
-
-        mdb.jobs.create_index('jid')
+        if PYMONGO_VERSION > _LooseVersion('2.3'):
+            mdb.saltReturns.create_index('minion')
+            mdb.saltReturns.create_index('jid')
+            mdb.jobs.create_index('jid')
+            mdb.events.create_index('tag')
+        else:
+            mdb.saltReturns.ensure_index('minion')
+            mdb.saltReturns.ensure_index('jid')
+            mdb.jobs.ensure_index('jid')
+            mdb.events.ensure_index('tag')
 
     return conn, mdb
 
@@ -168,18 +227,75 @@ def returner(ret):
     sdata = {'minion': ret['id'], 'jid': ret['jid'], 'return': back, 'fun': ret['fun'], 'full_ret': full_ret}
     if 'out' in ret:
         sdata['out'] = ret['out']
+
     # save returns in the saltReturns collection in the json format:
     # { 'minion': <minion_name>, 'jid': <job_id>, 'return': <return info with dots removed>,
     #   'fun': <function>, 'full_ret': <unformatted return with dots removed>}
-    mdb.saltReturns.insert(sdata)
+    #
+    # again we run into the issue with deprecated code from previous versions
+
+    if PYMONGO_VERSION > _LooseVersion('2.3'):
+        #using .copy() to ensure that the original data is not changed, raising issue with pymongo team
+        mdb.saltReturns.insert_one(sdata.copy())
+    else:
+        mdb.saltReturns.insert(sdata.copy())
 
 
-def save_load(jid, load):
+def _safe_copy(dat):
+    ''' mongodb doesn't allow '.' in keys, but does allow unicode equivs.
+        Apparently the docs suggest using escaped unicode full-width
+        encodings.  *sigh*
+
+            \\  -->  \\\\
+            $  -->  \\\\u0024
+            .  -->  \\\\u002e
+
+        Personally, I prefer URL encodings,
+
+        \\  -->  %5c
+        $  -->  %24
+        .  -->  %2e
+
+
+        Which means also escaping '%':
+
+        % -> %25
+    '''
+
+    if isinstance(dat, dict):
+        ret = {}
+        for k in dat:
+            r = k.replace('%', '%25').replace('\\', '%5c').replace('$', '%24').replace('.', '%2e')
+            if r != k:
+                log.debug('converting dict key from %s to %s for mongodb', k, r)
+            ret[r] = _safe_copy(dat[k])
+        return ret
+
+    if isinstance(dat, (list, tuple)):
+        return [_safe_copy(i) for i in dat]
+
+    return dat
+
+
+def save_load(jid, load, minions=None):
     '''
     Save the load for a given job id
     '''
     conn, mdb = _get_conn(ret=None)
-    mdb.jobs.insert(load)
+    to_save = _safe_copy(load)
+
+    if PYMONGO_VERSION > _LooseVersion('2.3'):
+        #using .copy() to ensure original data for load is unchanged
+        mdb.jobs.insert_one(to_save)
+    else:
+        mdb.jobs.insert(to_save)
+
+
+def save_minions(jid, minions, syndic_id=None):  # pylint: disable=unused-argument
+    '''
+    Included for API consistency
+    '''
+    pass
 
 
 def get_load(jid):
@@ -187,8 +303,7 @@ def get_load(jid):
     Return the load associated with a given job id
     '''
     conn, mdb = _get_conn(ret=None)
-    ret = mdb.jobs.find_one({'jid': jid})
-    return ret['load']
+    return mdb.jobs.find_one({'jid': jid}, {'_id': 0})
 
 
 def get_jid(jid):
@@ -197,7 +312,7 @@ def get_jid(jid):
     '''
     conn, mdb = _get_conn(ret=None)
     ret = {}
-    rdata = mdb.saltReturns.find({'jid': jid})
+    rdata = mdb.saltReturns.find({'jid': jid}, {'_id': 0})
     if rdata:
         for data in rdata:
             minion = data['minion']
@@ -212,7 +327,7 @@ def get_fun(fun):
     '''
     conn, mdb = _get_conn(ret=None)
     ret = {}
-    rdata = mdb.saltReturns.find_one({'fun': fun})
+    rdata = mdb.saltReturns.find_one({'fun': fun}, {'_id': 0})
     if rdata:
         ret = rdata
     return ret
@@ -234,9 +349,13 @@ def get_jids():
     Return a list of job ids
     '''
     conn, mdb = _get_conn(ret=None)
-    ret = []
-    name = mdb.jobs.distinct('jid')
-    ret.append(name)
+    map = "function() { emit(this.jid, this); }"
+    reduce = "function (key, values) { return values[0]; }"
+    result = mdb.jobs.inline_map_reduce(map, reduce)
+    ret = {}
+    for r in result:
+        jid = r['_id']
+        ret[jid] = salt.utils.jid.format_jid_instance(jid, r['value'])
     return ret
 
 
@@ -244,4 +363,22 @@ def prep_jid(nocache=False, passed_jid=None):  # pylint: disable=unused-argument
     '''
     Do any work necessary to prepare a JID, including sending a custom id
     '''
-    return passed_jid if passed_jid is not None else salt.utils.jid.gen_jid()
+    return passed_jid if passed_jid is not None else salt.utils.jid.gen_jid(__opts__)
+
+
+def event_return(events):
+    '''
+    Return events to Mongodb server
+    '''
+    conn, mdb = _get_conn(ret=None)
+
+    if isinstance(events, list):
+        events = events[0]
+
+    if isinstance(events, dict):
+        log.debug(events)
+
+        if PYMONGO_VERSION > _LooseVersion('2.3'):
+            mdb.events.insert_one(events.copy())
+        else:
+            mdb.events.insert(events.copy())

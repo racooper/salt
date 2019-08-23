@@ -4,16 +4,19 @@ Manage groups on Mac OS 10.7+
 '''
 
 # Import python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals, print_function
 try:
     import grp
 except ImportError:
     pass
 
 # Import Salt Libs
-import salt.utils
+import salt.utils.functools
+import salt.utils.itertools
+import salt.utils.stringutils
 from salt.exceptions import CommandExecutionError, SaltInvocationError
 from salt.modules.mac_user import _dscl, _flush_dscl_cache
+from salt.ext import six
 
 # Define the module's virtual name
 __virtualname__ = 'group'
@@ -22,10 +25,10 @@ __virtualname__ = 'group'
 def __virtual__():
     global _dscl, _flush_dscl_cache
     if (__grains__.get('kernel') != 'Darwin' or
-            __grains__['osrelease_info'] < (10, 7)):
-        return False
-    _dscl = salt.utils.namespaced_function(_dscl, globals())
-    _flush_dscl_cache = salt.utils.namespaced_function(
+            __grains__.get('osrelease_info') < (10, 7)):
+        return (False, 'The mac_group execution module cannot be loaded: only available on Darwin-based systems >= 10.7')
+    _dscl = salt.utils.functools.namespaced_function(_dscl, globals())
+    _flush_dscl_cache = salt.utils.functools.namespaced_function(
         _flush_dscl_cache, globals()
     )
     return __virtualname__
@@ -44,8 +47,10 @@ def add(name, gid=None, **kwargs):
     ### NOTE: **kwargs isn't used here but needs to be included in this
     ### function for compatibility with the group.present state
     if info(name):
-        raise CommandExecutionError('Group {0!r} already exists'.format(name))
-    if salt.utils.contains_whitespace(name):
+        raise CommandExecutionError(
+            'Group \'{0}\' already exists'.format(name)
+        )
+    if salt.utils.stringutils.contains_whitespace(name):
         raise SaltInvocationError('Group name cannot contain whitespace')
     if name.startswith('_'):
         raise SaltInvocationError(
@@ -55,30 +60,32 @@ def add(name, gid=None, **kwargs):
         raise SaltInvocationError('gid must be an integer')
     # check if gid is already in use
     gid_list = _list_gids()
-    if str(gid) in gid_list:
+    if six.text_type(gid) in gid_list:
         raise CommandExecutionError(
-            'gid {0!r} already exists'.format(gid)
+            'gid \'{0}\' already exists'.format(gid)
         )
 
-    cmd = 'dseditgroup -o create '
+    cmd = ['dseditgroup', '-o', 'create']
     if gid:
-        cmd += '-i {0} '.format(gid)
-    cmd += str(name)
-    return __salt__['cmd.retcode'](cmd) == 0
+        cmd.extend(['-i', gid])
+    cmd.append(name)
+    return __salt__['cmd.retcode'](cmd, python_shell=False) == 0
 
 
 def _list_gids():
     '''
     Return a list of gids in use
     '''
-    cmd = __salt__['cmd.run']('dscacheutil -q group | grep gid:',
-                              output_loglevel='quiet',
-                              python_shell=True)
-    data_list = cmd.split()
-    for item in data_list:
-        if item == 'gid:':
-            data_list.remove(item)
-    return sorted(set(data_list))
+    output = __salt__['cmd.run'](
+        ['dscacheutil', '-q', 'group'],
+        output_loglevel='quiet',
+        python_shell=False
+    )
+    ret = set()
+    for line in salt.utils.itertools.split(output, '\n'):
+        if line.startswith('gid:'):
+            ret.update(line.split()[1:])
+    return sorted(ret)
 
 
 def delete(name):
@@ -91,7 +98,7 @@ def delete(name):
 
         salt '*' group.delete foo
     '''
-    if salt.utils.contains_whitespace(name):
+    if salt.utils.stringutils.contains_whitespace(name):
         raise SaltInvocationError('Group name cannot contain whitespace')
     if name.startswith('_'):
         raise SaltInvocationError(
@@ -99,8 +106,8 @@ def delete(name):
         )
     if not info(name):
         return True
-    cmd = 'dseditgroup -o delete {0}'.format(name)
-    return __salt__['cmd.retcode'](cmd) == 0
+    cmd = ['dseditgroup', '-o', 'delete', name]
+    return __salt__['cmd.retcode'](cmd, python_shell=False) == 0
 
 
 def adduser(group, name):
@@ -124,7 +131,7 @@ def deluser(group, name):
     '''
     Remove a user from the group
 
-    .. versionadded:: Boron
+    .. versionadded:: 2016.3.0
 
     CLI Example:
 
@@ -143,7 +150,7 @@ def members(name, members_list):
     '''
     Replaces members of the group with a provided list.
 
-    .. versionadded:: Boron
+    .. versionadded:: 2016.3.0
 
     CLI Example:
 
@@ -178,7 +185,7 @@ def info(name):
 
         salt '*' group.info foo
     '''
-    if salt.utils.contains_whitespace(name):
+    if salt.utils.stringutils.contains_whitespace(name):
         raise SaltInvocationError('Group name cannot contain whitespace')
     try:
         # getgrnam seems to cache weirdly, so don't use it
@@ -235,8 +242,10 @@ def chgid(name, gid):
     pre_gid = __salt__['file.group_to_gid'](name)
     pre_info = info(name)
     if not pre_info:
-        raise CommandExecutionError('Group {0!r} does not exist'.format(name))
+        raise CommandExecutionError(
+            'Group \'{0}\' does not exist'.format(name)
+        )
     if gid == pre_info['gid']:
         return True
-    cmd = 'dseditgroup -o edit -i {0} {1}'.format(gid, name)
-    return __salt__['cmd.retcode'](cmd) == 0
+    cmd = ['dseditgroup', '-o', 'edit', '-i', gid, name]
+    return __salt__['cmd.retcode'](cmd, python_shell=False) == 0

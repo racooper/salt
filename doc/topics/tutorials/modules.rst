@@ -1,3 +1,5 @@
+.. _tutorial-remote-execution-modules:
+
 =========================
 Remote execution tutorial
 =========================
@@ -15,7 +17,7 @@ communicating with each other you can perform commands on the minion via the
 
     salt '<target>' <function> [arguments]
 
-.. seealso:: :doc:`salt manpage </ref/cli/salt>`
+.. seealso:: :ref:`salt manpage <ref-cli-salt>`
 
 target
 ------
@@ -25,34 +27,34 @@ following function. The default filter is a glob on the minion id. For example:
 
 .. code-block:: bash
 
-    salt '*' test.ping
-    salt '*.example.org' test.ping
+    salt '*' test.version
+    salt '*.example.org' test.version
 
 Targets can be based on minion system information using the Grains system:
 
 .. code-block:: bash
 
-    salt -G 'os:Ubuntu' test.ping
+    salt -G 'os:Ubuntu' test.version
 
-.. seealso:: :doc:`Grains system </topics/targeting/grains>`
+.. seealso:: :ref:`Grains system <targeting-grains>`
 
 Targets can be filtered by regular expression:
 
 .. code-block:: bash
 
-    salt -E 'virtmach[0-9]' test.ping
+    salt -E 'virtmach[0-9]' test.version
 
 Targets can be explicitly specified in a list:
 
 .. code-block:: bash
 
-    salt -L 'foo,bar,baz,quo' test.ping
+    salt -L 'foo,bar,baz,quo' test.version
 
 Or Multiple target types can be combined in one command:
 
 .. code-block:: bash
 
-    salt -C 'G@os:Ubuntu and webser* or E@database.*' test.ping
+    salt -C 'G@os:Ubuntu and webser* or E@database.*' test.version
 
 
 function
@@ -72,7 +74,7 @@ Show all currently available minions:
 
 .. code-block:: bash
 
-    salt '*' test.ping
+    salt '*' test.version
 
 Run an arbitrary shell command:
 
@@ -80,7 +82,7 @@ Run an arbitrary shell command:
 
     salt '*' cmd.run 'uname -a'
 
-.. seealso:: :doc:`the full list of modules </ref/modules/index>`
+.. seealso:: :ref:`the full list of modules <all-salt.modules>`
 
 arguments
 ---------

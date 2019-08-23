@@ -1,3 +1,5 @@
+.. _misc-salt-cloud-options:
+
 ================================
 Miscellaneous Salt Cloud Options
 ================================
@@ -14,18 +16,18 @@ to pass arguments to the deploy script:
 .. code-block:: yaml
 
     ec2-amazon:
-        provider: my-ec2-config
-        image: ami-1624987f
-        size: t1.micro
-        ssh_username: ec2-user
-        script: bootstrap-salt
-        script_args: -c /tmp/
+      provider: my-ec2-config
+      image: ami-1624987f
+      size: t1.micro
+      ssh_username: ec2-user
+      script: bootstrap-salt
+      script_args: -c /tmp/
 
 This has also been tested to work with pipes, if needed:
 
 .. code-block:: yaml
 
-    script_args: | head
+    script_args: '| head'
 
 
 Selecting the File Transport
@@ -64,7 +66,7 @@ The available options for this setting are:
     all
 
 
-Setting up New Salt Masters
+Setting Up New Salt Masters
 ===========================
 It has become increasingly common for users to set up multi-hierarchal
 infrastructures using Salt Cloud. This sometimes involves setting up an
@@ -87,8 +89,50 @@ profile or map:
 .. code-block:: yaml
 
     master:
-        user: root
-        interface: 0.0.0.0
+      user: root
+      interface: 0.0.0.0
+
+
+Setting Up a Salt Syndic with Salt Cloud
+========================================
+
+In addition to `setting up new Salt Masters`_, :ref:`syndics <syndic>` can also be
+provisioned using Salt Cloud. In order to set up a Salt Syndic via Salt Cloud,
+a Salt Master needs to be installed on the new machine and a master configuration
+file needs to be set up using the ``make_master`` setting. This setting can be
+defined either in a profile config file or in a map file:
+
+.. code-block:: yaml
+
+    make_master: True
+
+To install the Salt Syndic, the only other specification that needs to be
+configured is the ``syndic_master`` key to specify the location of the master
+that the syndic will be reporting to. This modification needs to be placed
+in the ``master`` setting, which can be configured either in the profile,
+provider, or ``/etc/salt/cloud`` config file:
+
+.. code-block:: yaml
+
+    master:
+      syndic_master: 123.456.789  # may be either an IP address or a hostname
+
+Many other Salt Syndic configuration settings and specifications can be passed
+through to the new syndic machine via the ``master`` configuration setting.
+See the :ref:`syndic` documentation for more information.
+
+
+SSH Port
+========
+
+By default ssh port is set to port 22. If you want to use a custom port in
+provider, profile, or map blocks use ssh_port option.
+
+.. versionadded:: 2015.5.0
+
+.. code-block:: yaml
+
+    ssh_port: 2222
 
 
 Delete SSH Keys
@@ -150,6 +194,7 @@ can tweak.
 
 .. admonition:: Note
 
+    All settings should be provided in lowercase
     All values should be provided in seconds
 
 
@@ -176,7 +221,7 @@ ssh_connect_timeout
 ~~~~~~~~~~~~~~~~~~~
 
 The amount of time Salt Cloud should wait for a successful SSH connection to
-the VM. 
+the VM.
 Default: varies by cloud provider  (between 5 and 15 minutes)
 
 
@@ -184,7 +229,7 @@ wait_for_passwd_timeout
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 The amount of time until an ssh connection can be established via password or
-ssh key. 
+ssh key.
 Default: varies by cloud provider (mostly 15 seconds)
 
 
@@ -200,7 +245,7 @@ wait_for_fun_timeout
 
 Some cloud drivers check for an available IP or a successful SSH connection
 using a function, namely, SoftLayer, and SoftLayer-HW. So, the amount of time
-Salt Cloud should retry such functions before failing. 
+Salt Cloud should retry such functions before failing.
 Default: 15 minutes.
 
 
@@ -332,3 +377,42 @@ script, a cloud profile using ``file_map`` might look like:
       file_map:
         /local/path/to/custom/script: /remote/path/to/use/custom/script
         /local/path/to/package: /remote/path/to/store/package
+
+Running Pre-Flight Commands
+===========================
+
+.. versionadded:: 2018.3.0
+
+To execute specified preflight shell commands on a VM before the deploy script is
+run, use the ``preflight_cmds`` option. These must be defined as a list in a cloud
+configuration file. For example:
+
+.. code-block:: yaml
+
+       my-cloud-profile:
+         provider: linode-config
+         image: Ubuntu 16.04 LTS
+         size: Linode 2048
+         preflight_cmds:
+           - whoami
+           - echo 'hello world!'
+
+These commands will run in sequence **before** the bootstrap script is executed.
+
+Force Minion Config
+===================
+
+.. versionadded:: 2018.3.0
+
+The ``force_minion_config`` option requests the bootstrap process to overwrite
+an existing minion configuration file and public/private key files.
+Default: False
+
+This might be important for drivers (such as ``saltify``) which are expected to
+take over a connection from a former salt master.
+
+.. code-block:: yaml
+
+    my_saltify_provider:
+      driver: saltify
+      force_minion_config: true

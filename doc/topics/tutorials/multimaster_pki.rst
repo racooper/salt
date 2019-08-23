@@ -1,3 +1,5 @@
+.. _tutorial-multi-master-pki:
+
 =======================================
 Multi-Master-PKI Tutorial With Failover
 =======================================
@@ -102,6 +104,7 @@ master_sign.pub) must be copied from the master to the minions pki-directory.
 
     /etc/salt/pki/minion/master_sign.pub
 
+.. important::
     DO NOT COPY THE master_sign.pem FILE. IT MUST STAY ON THE MASTER AND
     ONLY THERE!
 
@@ -117,11 +120,11 @@ debug mode.
 
 .. code-block:: bash
 
-    $ salt-minion -l debug
+    salt-minion -l debug
 
 Upon connecting to the master, the following lines should appear on the output:
 
-.. code-block:: bash
+.. code-block:: text
 
     [DEBUG   ] Attempting to authenticate with the Salt Master at 172.16.0.10
     [DEBUG   ] Loaded minion key: /etc/salt/pki/minion/minion.pem
@@ -134,7 +137,7 @@ Upon connecting to the master, the following lines should appear on the output:
 If the signature verification fails, something went wrong and it will look
 like this
 
-.. code-block:: bash
+.. code-block:: text
 
     [DEBUG   ] Attempting to authenticate with the Salt Master at 172.16.0.10
     [DEBUG   ] Loaded minion key: /etc/salt/pki/minion/minion.pem
@@ -149,10 +152,11 @@ In a case like this, it should be checked, that the verification pubkey
 Once the verification is successful, the minion can be started in daemon mode
 again.
 
-For the paranoid among us, its also possible to verify the public whenever it
-is received from the master. That is, for every single auth-attempt which can be
-quite frequent. For example just the start of the minion will force the signature
-to be checked 6 times for various things like auth, mine, highstate, etc.
+For the paranoid among us, its also possible to verify the publication whenever
+it is received from the master. That is, for every single auth-attempt which
+can be quite frequent. For example just the start of the minion will force the
+signature to be checked 6 times for various things like auth, mine,
+:ref:`highstate <running-highstate>`, etc.
 
 If that is desired, enable the setting
 
@@ -160,7 +164,6 @@ If that is desired, enable the setting
 .. code-block:: yaml
 
     always_verify_signature: True
-
 
 
 Multiple Masters For A Minion
@@ -220,7 +223,7 @@ line in debug mode
 
 .. code-block:: bash
 
-    $ salt-minion -l debug
+    salt-minion -l debug
 
 The minion will connect to the first master from its master list
 
@@ -235,7 +238,7 @@ The minion will connect to the first master from its master list
     [DEBUG   ] Decrypting the current master AES key
 
 
-A test.ping on the master the minion is currently connected to should be run to
+A test.version on the master the minion is currently connected to should be run to
 test connectivity.
 
 If successful, that master should be turned off. A firewall-rule denying the
@@ -306,7 +309,7 @@ That signature can be created with
 
 .. code-block:: bash
 
-    $ salt-key --gen-signature
+    salt-key --gen-signature
 
 This will create a default signature file in the master pki-directory
 
@@ -321,7 +324,7 @@ the signature file in one call
 
 .. code-block:: bash
 
-    $ salt-key --gen-signature --auto-create
+    salt-key --gen-signature --auto-create
 
 
 Telling the master to use the pre-created signature is done with

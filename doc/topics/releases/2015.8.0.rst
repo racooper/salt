@@ -1,3 +1,5 @@
+.. _release-2015-8-0:
+
 ================================================
 Salt 2015.8.0 Release Notes - Codename Beryllium
 ================================================
@@ -19,12 +21,11 @@ See the following links for instructions:
 - :ref:`Red Hat / CentOS 5, 6, 7 <installation-rhel-repo>`
 - :ref:`Debian 8 <installation-debian-repo>`
 - :ref:`Windows <windows-installer>`
-- FreeBSD
 
 Send Event on State Completion
 ==============================
 
-A `fire_event` global state keyword argument was added that allows any state to
+A ``fire_event`` global state keyword argument was added that allows any state to
 send an event upon completion. Useful for custom progress bars and checking in
 on long state runs. See :ref:`fire_event <requisites-fire-event>`.
 
@@ -38,6 +39,12 @@ SPM (Salt Package Manager)
 ==========================
 
 Allows Salt formulas to be packaged for ease of deployment. See :ref:`spm <spm>`.
+
+.. note::
+   The spm executable was not included in the Debian or Ubuntu packages for the
+   2015.8.0 or the 2015.8.1 releases. This executable will be included in an
+   upcoming release. As a workaround, copy the SPM script from the salt library
+   installation into ``/usr/local/bin`` or your local equivalent.
 
 Specify a Single Environment for Top Files
 ==========================================
@@ -57,19 +64,24 @@ for asynchronous behavior, which should greatly improve reliability and
 performance.
 
 .. note::
+    Tornado is considered expiremental in this release. The following known
+    issues were being investigated at the time of release:
 
-   Tornado is considered expiremental in this release. The following known
-   issues were being investigated at the time of release:
-     - TCP tests show
-       performance degredation over time (:issue:`26051`)
-     - TCP transport stacktrace on windows minion: Future exception was never
-       retrieved (:issue:`25718`)
-     - [freebsd] TCP transport not working in 2015.8.0rc3 (:issue:`26364`)
+    - TCP tests show performance degredation over time (:issue:`26051`)
+    - TCP transport stacktrace on windows minion: Future exception was never
+      retrieved (:issue:`25718`)
+    - [freebsd] TCP transport not working in 2015.8.0rc3 (:issue:`26364`)
 
 Proxy Minion Enhancements
 =========================
 
 Proxy Minions have undergone a significant overhaul in 2015.8, see :ref:`Proxy Minion Enhancements <proxy-2015.8.0>`.
+
+Engines
+=======
+
+Salt engines are long-running, external processes that leverage Salt. See :ref:`Salt Engines <engines>`.
+
 
 Core Changes
 ============
@@ -92,7 +104,9 @@ bringing with it the ability to access authenticated repositories.
 
 Using the new features will require updates to the git ext_pillar
 configuration, further details can be found in the :ref:`pillar.git_pillar
-<git-pillar-2015-8-0-and-later>` docs.
+<git-pillar-configuration>` docs.
+
+.. _pygit2: https://github.com/libgit2/pygit2
 
 Salt Cloud Improvements
 =======================
@@ -120,8 +134,10 @@ State and Execution Module Improvements
 
 - New and improved Docker state and execution modules (:mod:`state
   <salt.states.dockerng>` and :mod:`execution module <salt.modules.dockerng>`).
+
 .. toctree::
     includes/git-2015.8.0
+
 - OpenStack Glance API V2 execution module
 - Amazon VPC state module
 - RallyDev execution module
@@ -154,37 +170,26 @@ Windows Improvements
 Windows Software Repo Changes
 -----------------------------
 
-Several config options have been renamed to make their naming more consistent.
-For a list of the winrepo config options, see :ref:`here
-<winrepo-master-config-opts>` for master config options, and :ref:`here
-<winrepo-minion-config-opts>` for configuration options for masterless Windows
-minions.
+A next-generation (ng) windows software repo is available for 2015.8.0 and
+later minions. When using this new repository, the repo cache is compiled on
+the Salt Minion, which enables pillar, grains and other things to be available
+during compilation time.
 
-On the master, the :mod:`winrepo.update_git_repos
-<salt.runners.winrepo.update_git_repos>` runner has been updated to use either
-pygit2_ or GitPython_ to checkout the git repositories containing repo data. If
-pygit2_ or GitPython_ is installed, existing winrepo git checkouts should be
-removed after upgrading to 2015.8.0, to allow them to be checked out again by
-running :py:func:`winrepo.update_git_repos
-<salt.runners.winrepo.update_git_repos>`.
+See the :ref:`Windows Software Repository <2015-8-0-winrepo-changes>`
+documentation for more information.
 
-This enhancement also brings new functionality, see the :ref:`Windows Software
-Repository <2015-8-0-winrepo-changes>` documentation for more information.
+Changes to legacy Windows repository
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-If neither GitPython_ nor pygit2_ are installed, then Salt will fall back to
-the pre-existing behavior for :mod:`winrepo.update_git_repos
-<salt.runners.winrepo.update_git_repos>`, and a warning will be logged in the
-master log.
+If you have pre 2015.8 Windows minions connecting to your 2015.8 Salt master, you
+can continue to use the legacy Windows repository for these Salt minions.
 
-.. note::
-    Standalone Windows minions do not support the new GitPython_/pygit2_
-    functionality, and will instead use the :py:func:`git.latest
-    <salt.states.git.latest>` state to keep repositories up-to-date. More
-    information on how to use the Windows Software Repo on a standalone minion
-    can be found :ref:`here <standalone-winrepo>`.
+If you were previously using this repository and have customized settings, be
+aware that several config options have been renamed to make their naming more
+consistent.
 
-.. _pygit2: https://github.com/libgit2/pygit2
-.. _GitPython: https://github.com/gitpython-developers/GitPython
+See the :ref:`Windows Software Repository <2015-8-0-winrepo-changes>`
+documentation for more information.
 
 Win System Module
 -----------------
@@ -226,7 +231,7 @@ Deprecations
 
 - The use of ``provider`` in Salt Cloud provider files to define cloud drivers
   has been deprecated in favor of using ``driver``. Both terms will work until
-  the Nitrogen release of Salt. Example provider file:
+  the 2017.7.0 release of Salt. Example provider file:
 
 .. code-block:: yaml
 
@@ -252,6 +257,13 @@ Deprecations
 
 - The use of ``delim`` was removed from the following functions in the ``match``
   execution module: ``pillar_pcre``, ``pillar``, ``grain_pcre``,
+
+Security Fixes
+==============
+
+CVE-2015-6918 - Git modules leaking HTTPS auth credentials to debug log
+
+Updated the Git state and execution modules to no longer display HTTPS basic authentication credentials in loglevel debug output on the Salt master. These credentials are now replaced with ``REDACTED`` in the debug output. Thanks to Andreas Stieger <asteiger@suse.com> for bringing this to our attention.
 
 Major Bug Fixes
 ===============

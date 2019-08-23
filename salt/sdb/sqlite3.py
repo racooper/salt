@@ -42,7 +42,7 @@ create the table(s) and get and set values.
     get_query: "SELECT d FROM advanced WHERE a=:key"
     set_query: "INSERT OR REPLACE INTO advanced (a, d) VALUES (:key, :value)"
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import python libs
 import logging
@@ -53,8 +53,9 @@ try:
 except ImportError:
     HAS_SQLITE3 = False
 
-# Import third party libs
-import msgpack
+# Import salt libs
+import salt.utils.msgpack
+from salt.ext import six
 
 
 DEFAULT_TABLE = 'sdb'
@@ -122,7 +123,10 @@ def set_(key, value, profile=None):
     if not profile:
         return False
     conn, cur, table = _connect(profile)
-    value = buffer(msgpack.packb(value))
+    if six.PY2:
+        value = buffer(salt.utils.msgpack.packb(value))
+    else:
+        value = memoryview(salt.utils.msgpack.packb(value))
     q = profile.get('set_query', ('INSERT OR REPLACE INTO {0} VALUES '
                                   '(:key, :value)').format(table))
     conn.execute(q, {'key': key, 'value': value})
@@ -143,4 +147,18 @@ def get(key, profile=None):
     res = res.fetchone()
     if not res:
         return None
-    return msgpack.unpackb(res[0])
+    return salt.utils.msgpack.unpackb(res[0])
+
+
+def delete(key, profile=None):
+    '''
+    Delete a key/value pair from sqlite3
+    '''
+    if not profile:
+        return None
+    conn, cur, table = _connect(profile)
+    q = profile.get('delete_query', ('DELETE FROM {0} WHERE '
+                                     'key=:key'.format(table)))
+    res = cur.execute(q, {'key': key})
+    conn.commit()
+    return cur.rowcount

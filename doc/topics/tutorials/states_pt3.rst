@@ -1,11 +1,13 @@
+.. _tutorial-states-part-3:
+
 =======================================================
 States tutorial, part 3 - Templating, Includes, Extends
 =======================================================
 
 .. note::
 
-  This tutorial builds on topics covered in :doc:`part 1 <states_pt1>` and
-  :doc:`part 2 <states_pt2>`. It is recommended that you begin there.
+  This tutorial builds on topics covered in :ref:`part 1 <states-tutorial>` and
+  :ref:`part 2 <tutorial-states-part-2>`. It is recommended that you begin there.
 
 This part of the tutorial will cover more advanced templating and
 configuration techniques for ``sls`` files.
@@ -47,11 +49,11 @@ Here's a more complex example:
 .. code-blocK:: jinja
 
     # Comments in yaml start with a hash symbol.
-    # Since jinja rendering occurs before yaml parsing, if you want to include jinja 
+    # Since jinja rendering occurs before yaml parsing, if you want to include jinja
     # in the comments you may need to escape them using 'jinja' comments to prevent
     # jinja from trying to render something which is not well-defined jinja.
     # e.g.
-    # {# iterate over the Three Stooges using a {% for %}..{% endfor %} loop 
+    # {# iterate over the Three Stooges using a {% for %}..{% endfor %} loop
     # with the iterator variable {{ usr }} becoming the state ID. #}
     {% for usr in 'moe','larry','curly' %}
     {{ usr }}:
@@ -68,8 +70,8 @@ Using Grains in SLS modules
 ===========================
 
 Often times a state will need to behave differently on different systems.
-:doc:`Salt grains </topics/targeting/grains>` objects are made available
-in the template context. The `grains` can be used from within sls modules:
+:ref:`Salt grains <targeting-grains>` objects are made available in the template
+context. The `grains` can be used from within sls modules:
 
 .. code-block:: jinja
 
@@ -80,6 +82,42 @@ in the template context. The `grains` can be used from within sls modules:
         {% elif grains['os'] == 'Ubuntu' %}
         - name: apache2
         {% endif %}
+
+Using Environment Variables in SLS modules
+==========================================
+
+You can use ``salt['environ.get']('VARNAME')`` to use an environment
+variable in a Salt state.
+
+.. code-block:: bash
+
+   MYENVVAR="world" salt-call state.template test.sls
+
+.. code-block:: jinja
+
+   Create a file with contents from an environment variable:
+     file.managed:
+       - name: /tmp/hello
+       - contents: {{ salt['environ.get']('MYENVVAR') }}
+
+Error checking:
+
+.. code-block:: jinja
+
+   {% set myenvvar = salt['environ.get']('MYENVVAR') %}
+   {% if myenvvar %}
+
+   Create a file with contents from an environment variable:
+     file.managed:
+       - name: /tmp/hello
+       - contents: {{ salt['environ.get']('MYENVVAR') }}
+
+   {% else %}
+
+   Fail - no environment passed in:
+     test.fail_without_changes
+
+   {% endif %}
 
 Calling Salt modules from templates
 ===================================
@@ -92,11 +130,23 @@ modules.
 The Salt module functions are also made available in the template context as
 ``salt:``
 
+The following example illustrates calling the ``group_to_gid`` function in the
+``file`` execution module with a single positional argument called
+``some_group_that_exists``.
+
 .. code-block:: jinja
 
     moe:
       user.present:
         - gid: {{ salt['file.group_to_gid']('some_group_that_exists') }}
+
+One way to think about this might be that the ``gid`` key is being assigned
+a value equivalent to the following python pseudo-code:
+
+.. code-block:: python
+
+    import salt.modules.file
+    file.group_to_gid('some_group_that_exists')
 
 Note that for the above example to work, ``some_group_that_exists`` must exist
 before the state file is processed by the templating engine.
@@ -108,6 +158,9 @@ MAC address for eth0:
 
     salt['network.hw_addr']('eth0')
 
+To examine the possible arguments to each execution module function,
+one can examine the `module reference documentation </ref/modules/all>`_:
+
 Advanced SLS module syntax
 ==========================
 
@@ -118,7 +171,7 @@ Include declaration
 -------------------
 
 A previous example showed how to spread a Salt tree across several files.
-Similarly, :doc:`requisites </ref/states/requisites>` span multiple files by
+Similarly, :ref:`requisites` span multiple files by
 using an :ref:`include-declaration`. For example:
 
 ``python/python-libs.sls:``
@@ -221,6 +274,6 @@ can be rewritten without the loop:
 Next steps
 ==========
 
-In :doc:`part 4 <states_pt4>` we will discuss how to use salt's
+In :ref:`part 4 <tutorial-states-part-4>` we will discuss how to use salt's
 :conf_master:`file_roots` to set up a workflow in which states can be
 "promoted" from dev, to QA, to production.

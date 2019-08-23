@@ -27,7 +27,7 @@ The Ubuntu community documentation contains an explanation of this setting, as
 it applies to systems that dual-boot with Windows. This is explained in greater
 detail here_.
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import salt libs
 from salt.exceptions import SaltInvocationError, CommandExecutionError
@@ -63,7 +63,7 @@ def system(name, utc=True):
     except (SaltInvocationError, CommandExecutionError) as exc:
         ret['result'] = False
         ret['comment'] = (
-            'Unable to compare desrired timezone {0!r} to system timezone: {1}'
+            'Unable to compare desired timezone \'{0}\' to system timezone: {1}'
             .format(name, exc)
         )
         return ret
